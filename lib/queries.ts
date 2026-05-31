@@ -17,7 +17,7 @@ export type MarketingWindow = {
   impressions: number;            // Etapa 1 (Meta)
   landing_page_views: number;     // Etapa 2 (Meta Pixel)
   vsl_views: number | null;       // Etapa 3 (YouTube, null si no configurado)
-  // agendamientos (Etapa 4) → null hasta Fase 4 (UI leads)
+  agendamientos: number;          // Etapa 4 (count leads con fecha_agenda en rango — vía Calendly)
   thanks_views: number | null;    // Etapa 5 (YouTube, video 9-min de intent real)
 
   // Métrica auxiliar (no es etapa del funnel, mide alcance de página Thanks)
@@ -79,8 +79,8 @@ export async function getMarketingWindow(
 ): Promise<MarketingWindow> {
   const supabase = getSupabaseServer();
 
-  // Query paralelas: meta + youtube
-  const [metaRes, ytRes] = await Promise.all([
+  // Query paralelas: meta + youtube + leads (agendamientos)
+  const [metaRes, ytRes, leadsRes] = await Promise.all([
     supabase
       .from('marketing_metrics_daily')
       .select('fecha, impressions, landing_page_views, clicks, link_clicks, reach, spend')
@@ -93,13 +93,20 @@ export async function getMarketingWindow(
       .eq('plataforma', 'youtube')
       .gte('fecha', start)
       .lte('fecha', end),
+    supabase
+      .from('leads')
+      .select('id', { count: 'exact', head: true })
+      .gte('fecha_agenda', start)
+      .lte('fecha_agenda', end),
   ]);
 
   if (metaRes.error) throw new Error(`Query Meta falló: ${metaRes.error.message}`);
   if (ytRes.error) throw new Error(`Query YouTube falló: ${ytRes.error.message}`);
+  if (leadsRes.error) throw new Error(`Query leads falló: ${leadsRes.error.message}`);
 
   const metaRows = (metaRes.data ?? []) as MetaRow[];
   const ytRows = (ytRes.data ?? []) as YouTubeRow[];
+  const agendamientos = leadsRes.count ?? 0;
 
   // ── Meta aggregates ──
   const impressions = sum(metaRows.map((r) => r.impressions));
@@ -141,6 +148,18 @@ export async function getMarketingWindow(
       ? safeDiv(landing_page_views, vsl_views)
       : null;
 
+  // VSL → Agendamientos: solo si tenemos ambos
+  const ratio_vsl_agenda =
+    vsl_views !== null && vsl_views > 0 && agendamientos > 0
+      ? safeDiv(vsl_views, agendamientos)
+      : null;
+
+  // Agendamientos → Thanks: de los que agendaron, cuántos vieron el video Thanks
+  const ratio_agenda_thanks =
+    agendamientos > 0 && thanks_views !== null && thanks_views > 0
+      ? safeDiv(agendamientos, thanks_views)
+      : null;
+
   return {
     start,
     end,
@@ -149,6 +168,7 @@ export async function getMarketingWindow(
     impressions,
     landing_page_views,
     vsl_views,
+    agendamientos,
     thanks_views,
 
     clicks,
@@ -163,8 +183,8 @@ export async function getMarketingWindow(
 
     ratio_imp_landing,
     ratio_landing_vsl,
-    ratio_vsl_agenda: null,
-    ratio_agenda_thanks: null,
+    ratio_vsl_agenda,
+    ratio_agenda_thanks,
 
     vsl_days_baseline_only,
     thanks_days_baseline_only,

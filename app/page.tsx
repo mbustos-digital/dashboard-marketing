@@ -121,8 +121,10 @@ export default async function Page() {
       {/* FOOTER */}
       <footer className="mt-12 pt-6 border-t" style={{ borderColor: 'var(--card-border)' }}>
         <p className="text-base" style={{ color: 'var(--text-pending)' }}>
-          Estado: Fase 2 en producción. Cron Meta corriendo diario a las 6:00 AM Tijuana.
-          Pendientes: YouTube (Fase 3), captura manual de leads (Fase 4), pestaña Comercial y Vista General (Fase 5).
+          Sistema completo en producción. Crons automáticos diarios: Meta 6:00 AM TJ, YouTube 6:15 AM TJ.
+          Calendly webhook alimenta leads sin intervención. Manual: marcar asistió/calificado/cerro en{' '}
+          <a href="/leads" style={{ color: 'var(--accent-yellow)', textDecoration: 'underline' }}>/leads/[id]</a>{' '}
+          post-J1.
         </p>
       </footer>
     </main>
@@ -182,7 +184,12 @@ function VentanaCard({
             ) : (
               <StageRow num="3" label="Vistas Video VSL" value="—" pending="Fase 3" />
             )}
-            <StageRow num="4" label="Agendamientos" value="—" pending="Fase 4" />
+            <StageRow
+              num="4"
+              label="Agendamientos"
+              value={fmtNumber(data.agendamientos)}
+              highlight
+            />
             {data.thanks_views !== null ? (
               <StageRow
                 num="5"
@@ -223,6 +230,8 @@ function VentanaCard({
               const calculables: Array<{ label: string; value: number }> = [];
               if (data.ratio_imp_landing !== null) calculables.push({ label: 'imp_landing', value: data.ratio_imp_landing });
               if (data.ratio_landing_vsl !== null) calculables.push({ label: 'landing_vsl', value: data.ratio_landing_vsl });
+              if (data.ratio_vsl_agenda !== null) calculables.push({ label: 'vsl_agenda', value: data.ratio_vsl_agenda });
+              if (data.ratio_agenda_thanks !== null) calculables.push({ label: 'agenda_thanks', value: data.ratio_agenda_thanks });
               const peorLabel =
                 calculables.length >= 2
                   ? calculables.reduce((max, r) => (r.value > max.value ? r : max)).label
@@ -241,10 +250,26 @@ function VentanaCard({
                       isPeor={peorLabel === 'landing_vsl'}
                     />
                   ) : (
-                    <RatioRow label="Landing → VSL" value="—" pending={data.vsl_views === null ? 'Fase 3' : 'sin datos'} />
+                    <RatioRow label="Landing → VSL" value="—" pending="sin datos" />
                   )}
-                  <RatioRow label="VSL → Agendamiento" value="—" pending="Fase 3+4" />
-                  <RatioRow label="Agendamiento → Thanks" value="—" pending="Fase 3+4" />
+                  {data.ratio_vsl_agenda !== null ? (
+                    <RatioRow
+                      label="VSL → Agendamiento"
+                      value={fmtRatio(data.ratio_vsl_agenda)}
+                      isPeor={peorLabel === 'vsl_agenda'}
+                    />
+                  ) : (
+                    <RatioRow label="VSL → Agendamiento" value="—" pending="sin datos" />
+                  )}
+                  {data.ratio_agenda_thanks !== null ? (
+                    <RatioRow
+                      label="Agendamiento → Thanks"
+                      value={fmtRatio(data.ratio_agenda_thanks)}
+                      isPeor={peorLabel === 'agenda_thanks'}
+                    />
+                  ) : (
+                    <RatioRow label="Agendamiento → Thanks" value="—" pending="sin datos" />
+                  )}
                 </>
               );
             })()}
