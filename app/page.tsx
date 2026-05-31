@@ -184,6 +184,12 @@ function VentanaCard({
             ) : (
               <StageRow num="3" label="Vistas Video VSL" value="—" pending="Fase 3" />
             )}
+            {data.vsl_cumulative_total !== null && (
+              <AuxRow
+                label="↳ Histórico desde publicación"
+                value={fmtNumber(data.vsl_cumulative_total)}
+              />
+            )}
             <StageRow
               num="4"
               label="Agendamientos"
@@ -201,25 +207,28 @@ function VentanaCard({
             ) : (
               <StageRow num="5" label="Vistas Video Thanks (9 min)" value="—" pending="Fase 3" />
             )}
+            {data.thanks_cumulative_total !== null && (
+              <AuxRow
+                label="↳ Histórico desde publicación"
+                value={fmtNumber(data.thanks_cumulative_total)}
+              />
+            )}
             {data.thanks_prep_views !== null && (
-              <div className="flex items-baseline justify-between gap-3 py-1 pl-6">
-                <span className="text-base truncate" style={{ color: 'var(--text-dim)' }}>
-                  ↳ Prep video (40 seg, alcance)
-                </span>
-                <div className="flex items-center gap-2 shrink-0">
-                  {data.thanks_prep_days_baseline_only > 0 && (
-                    <span
-                      className="text-sm px-1.5 py-0.5 rounded"
-                      style={{ background: '#1a1a1a', color: 'var(--text-dim)' }}
-                    >
-                      {data.thanks_prep_days_baseline_only}d baseline
-                    </span>
-                  )}
-                  <span className="text-base font-medium tabular-nums" style={{ color: 'var(--text-dim)' }}>
-                    {fmtNumber(data.thanks_prep_views)}
-                  </span>
-                </div>
-              </div>
+              <AuxRow
+                label="↳ Prep video (40 seg, alcance)"
+                value={fmtNumber(data.thanks_prep_views)}
+                badge={
+                  data.thanks_prep_days_baseline_only > 0
+                    ? `${data.thanks_prep_days_baseline_only}d baseline`
+                    : undefined
+                }
+              />
+            )}
+            {data.thanks_prep_cumulative_total !== null && (
+              <AuxRow
+                label="↳ Prep video — histórico desde publicación"
+                value={fmtNumber(data.thanks_prep_cumulative_total)}
+              />
             )}
           </Section>
 
@@ -432,6 +441,37 @@ function KvRow({ label, value }: { label: string; value: string }) {
         {label}
       </span>
       <span className="text-lg font-medium tabular-nums">{value}</span>
+    </div>
+  );
+}
+
+function AuxRow({
+  label,
+  value,
+  badge,
+}: {
+  label: string;
+  value: string;
+  badge?: string;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-3 py-1 pl-6">
+      <span className="text-base truncate" style={{ color: 'var(--text-dim)' }}>
+        {label}
+      </span>
+      <div className="flex items-center gap-2 shrink-0">
+        {badge && (
+          <span
+            className="text-sm px-1.5 py-0.5 rounded"
+            style={{ background: '#1a1a1a', color: 'var(--text-dim)' }}
+          >
+            {badge}
+          </span>
+        )}
+        <span className="text-base font-medium tabular-nums" style={{ color: 'var(--text-dim)' }}>
+          {value}
+        </span>
+      </div>
     </div>
   );
 }

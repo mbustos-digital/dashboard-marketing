@@ -45,6 +45,13 @@ export type MarketingWindow = {
   // Días con baseline-only de YouTube (sin delta calculable)
   vsl_days_baseline_only: number;
   thanks_days_baseline_only: number;
+
+  // Cumulativo histórico (vistas totales desde publicación del video)
+  // No es del rango, es global — sirve para dar contexto cuando los deltas
+  // diarios apenas empiezan.
+  vsl_cumulative_total: number | null;
+  thanks_cumulative_total: number | null;
+  thanks_prep_cumulative_total: number | null;
 };
 
 type MetaRow = {
@@ -78,6 +85,31 @@ export async function getMarketingWindow(
   end: string,
 ): Promise<MarketingWindow> {
   const supabase = getSupabaseServer();
+
+  // Query del último cumulativo de cada video (raw_payload de la fila más
+  // reciente, sin importar fecha — es la "vistas totales del video desde su
+  // publicación", para dar contexto cuando el delta diario apenas arranca).
+  const ytLatestRes = await supabase
+    .from('marketing_metrics_daily')
+    .select('youtube_video_type, raw_payload')
+    .eq('plataforma', 'youtube')
+    .order('created_at', { ascending: false })
+    .limit(50); // suficiente para tener al menos 1 fila por video_type
+  if (ytLatestRes.error) {
+    throw new Error(`Query latest YouTube falló: ${ytLatestRes.error.message}`);
+  }
+  const ytLatestRows = (ytLatestRes.data ?? []) as Array<{
+    youtube_video_type: 'vsl' | 'thanks' | 'thanks_prep' | null;
+    raw_payload: { cumulative_views?: number } | null;
+  }>;
+  function getCumulative(type: 'vsl' | 'thanks' | 'thanks_prep'): number | null {
+    const first = ytLatestRows.find((r) => r.youtube_video_type === type);
+    if (!first) return null;
+    return first.raw_payload?.cumulative_views ?? null;
+  }
+  const vsl_cumulative_total = getCumulative('vsl');
+  const thanks_cumulative_total = getCumulative('thanks');
+  const thanks_prep_cumulative_total = getCumulative('thanks_prep');
 
   // Query paralelas: meta + youtube + leads (agendamientos)
   const [metaRes, ytRes, leadsRes] = await Promise.all([
@@ -191,6 +223,10 @@ export async function getMarketingWindow(
 
     thanks_prep_views,
     thanks_prep_days_baseline_only,
+
+    vsl_cumulative_total,
+    thanks_cumulative_total,
+    thanks_prep_cumulative_total,
   };
 }
 
