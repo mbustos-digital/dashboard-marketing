@@ -39,7 +39,7 @@ export type MarketingMetricRow = {
 
   // YouTube (relleno en Fase 3)
   youtube_video_id?: string | null;
-  youtube_video_type?: 'vsl' | 'thanks' | null;
+  youtube_video_type?: 'vsl' | 'thanks' | 'thanks_prep' | null;
   youtube_views?: number | null;
   youtube_minutes_watched?: number | null;
   youtube_avg_view_duration?: number | null;

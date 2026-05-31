@@ -27,9 +27,10 @@ export async function GET(request: NextRequest) {
     return Response.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
   }
 
-  const videos: Array<{ id: string | undefined; type: 'vsl' | 'thanks' }> = [
+  const videos: Array<{ id: string | undefined; type: 'vsl' | 'thanks' | 'thanks_prep' }> = [
     { id: process.env.YOUTUBE_VSL_VIDEO_ID, type: 'vsl' },
     { id: process.env.YOUTUBE_THANKS_VIDEO_ID, type: 'thanks' },
+    { id: process.env.YOUTUBE_THANKS_PREP_VIDEO_ID, type: 'thanks_prep' },
   ];
 
   const results = await Promise.all(

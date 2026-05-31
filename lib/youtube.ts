@@ -168,12 +168,19 @@ async function getYesterdayCumulative(
 }
 
 /**
- * Procesa UN video (VSL o Thanks): fetch + calcular delta + upsert.
+ * Tipos de video que trackeamos. 'thanks' es el video principal de la página
+ * Thanks (etapa 5 del funnel). 'thanks_prep' es el corto de preparación que
+ * mide alcance de la página, no intent.
+ */
+export type VideoType = 'vsl' | 'thanks' | 'thanks_prep';
+
+/**
+ * Procesa UN video (VSL, Thanks o Thanks_prep): fetch + calcular delta + upsert.
  * @returns el row insertado (para logging)
  */
 export async function processVideo(
   videoId: string,
-  videoType: 'vsl' | 'thanks',
+  videoType: VideoType,
   fecha: string,
 ): Promise<{
   inserted: boolean;
@@ -255,14 +262,14 @@ export async function processVideo(
 }
 
 /**
- * Itera sobre los videos configurados en env (VSL + Thanks si están).
+ * Itera sobre los videos configurados en env (VSL + Thanks + Thanks_prep).
  * @returns lista de resultados por video.
  */
 export async function processAllVideos(
   fecha: string,
 ): Promise<Array<{
   videoId: string;
-  videoType: 'vsl' | 'thanks';
+  videoType: VideoType;
   status: 'ok' | 'skipped' | 'error';
   daily_views?: number | null;
   cumulative_views?: number;
@@ -271,7 +278,7 @@ export async function processAllVideos(
 }>> {
   const results: Array<{
     videoId: string;
-    videoType: 'vsl' | 'thanks';
+    videoType: VideoType;
     status: 'ok' | 'skipped' | 'error';
     daily_views?: number | null;
     cumulative_views?: number;
@@ -279,9 +286,10 @@ export async function processAllVideos(
     error?: string;
   }> = [];
 
-  const videos: Array<{ id: string | undefined; type: 'vsl' | 'thanks' }> = [
+  const videos: Array<{ id: string | undefined; type: VideoType }> = [
     { id: process.env.YOUTUBE_VSL_VIDEO_ID, type: 'vsl' },
     { id: process.env.YOUTUBE_THANKS_VIDEO_ID, type: 'thanks' },
+    { id: process.env.YOUTUBE_THANKS_PREP_VIDEO_ID, type: 'thanks_prep' },
   ];
 
   for (const v of videos) {

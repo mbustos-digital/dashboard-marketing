@@ -18,7 +18,11 @@ export type MarketingWindow = {
   landing_page_views: number;     // Etapa 2 (Meta Pixel)
   vsl_views: number | null;       // Etapa 3 (YouTube, null si no configurado)
   // agendamientos (Etapa 4) → null hasta Fase 4 (UI leads)
-  thanks_views: number | null;    // Etapa 5 (YouTube, null si no configurado)
+  thanks_views: number | null;    // Etapa 5 (YouTube, video 9-min de intent real)
+
+  // Métrica auxiliar (no es etapa del funnel, mide alcance de página Thanks)
+  thanks_prep_views: number | null;
+  thanks_prep_days_baseline_only: number;
 
   // Métricas Meta auxiliares
   clicks: number;
@@ -56,7 +60,7 @@ type MetaRow = {
 type YouTubeRow = {
   fecha: string;
   youtube_video_id: string | null;
-  youtube_video_type: 'vsl' | 'thanks' | null;
+  youtube_video_type: 'vsl' | 'thanks' | 'thanks_prep' | null;
   youtube_views: number | null;
 };
 
@@ -108,16 +112,20 @@ export async function getMarketingWindow(
   // ── YouTube aggregates por tipo ──
   const vslRows = ytRows.filter((r) => r.youtube_video_type === 'vsl');
   const thanksRows = ytRows.filter((r) => r.youtube_video_type === 'thanks');
+  const thanksPrepRows = ytRows.filter((r) => r.youtube_video_type === 'thanks_prep');
 
   // Solo se cuentan días con dato (no null = delta calculado).
   const vslWithData = vslRows.filter((r) => r.youtube_views !== null);
   const thanksWithData = thanksRows.filter((r) => r.youtube_views !== null);
+  const thanksPrepWithData = thanksPrepRows.filter((r) => r.youtube_views !== null);
 
   const vsl_views = vslRows.length === 0 ? null : sum(vslWithData.map((r) => r.youtube_views));
   const thanks_views = thanksRows.length === 0 ? null : sum(thanksWithData.map((r) => r.youtube_views));
+  const thanks_prep_views = thanksPrepRows.length === 0 ? null : sum(thanksPrepWithData.map((r) => r.youtube_views));
 
   const vsl_days_baseline_only = vslRows.length - vslWithData.length;
   const thanks_days_baseline_only = thanksRows.length - thanksWithData.length;
+  const thanks_prep_days_baseline_only = thanksPrepRows.length - thanksPrepWithData.length;
 
   // ── Días con datos (algún row meta o youtube ese día) ──
   const fechasUnicas = new Set<string>();
@@ -160,5 +168,8 @@ export async function getMarketingWindow(
 
     vsl_days_baseline_only,
     thanks_days_baseline_only,
+
+    thanks_prep_views,
+    thanks_prep_days_baseline_only,
   };
 }

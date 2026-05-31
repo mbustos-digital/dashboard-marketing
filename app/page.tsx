@@ -245,9 +245,35 @@ function VentanaCard({
             )}
             <StageRow num="4" label="Agendamientos" value="—" pending="Fase 4" />
             {data.thanks_views !== null ? (
-              <StageRow num="5" label="Vistas Video Thanks" value={fmtNumber(data.thanks_views)} highlight />
+              <StageRow
+                num="5"
+                label="Vistas Video Thanks (9 min)"
+                value={fmtNumber(data.thanks_views)}
+                highlight
+                note={data.thanks_days_baseline_only > 0 ? `${data.thanks_days_baseline_only}d baseline` : undefined}
+              />
             ) : (
-              <StageRow num="5" label="Vistas Video Thanks" value="—" pending="Fase 3" />
+              <StageRow num="5" label="Vistas Video Thanks (9 min)" value="—" pending="Fase 3" />
+            )}
+            {data.thanks_prep_views !== null && (
+              <div className="flex items-baseline justify-between gap-3 py-1 pl-6">
+                <span className="text-base truncate" style={{ color: 'var(--text-dim)' }}>
+                  ↳ Prep video (40 seg, alcance)
+                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                  {data.thanks_prep_days_baseline_only > 0 && (
+                    <span
+                      className="text-sm px-1.5 py-0.5 rounded"
+                      style={{ background: '#1a1a1a', color: 'var(--text-dim)' }}
+                    >
+                      {data.thanks_prep_days_baseline_only}d baseline
+                    </span>
+                  )}
+                  <span className="text-base font-medium tabular-nums" style={{ color: 'var(--text-dim)' }}>
+                    {fmtNumber(data.thanks_prep_views)}
+                  </span>
+                </div>
+              </div>
             )}
           </Section>
 
