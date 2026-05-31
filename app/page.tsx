@@ -130,7 +130,7 @@ export default async function Page() {
         <p className="text-base" style={{ color: 'var(--text-pending)' }}>
           Crons automáticos diarios: Meta 6:00 AM TJ, YouTube 6:15 AM TJ. Calendly webhook
           alimenta leads sin intervención. Manual: marcar asistió/calificado/cerro en{' '}
-          <a href="/leads" style={{ color: 'var(--accent-yellow)', textDecoration: 'underline' }}>/leads/[id]</a>{' '}
+          <Link href="/leads" style={{ color: 'var(--accent-yellow)', textDecoration: 'underline' }}>/leads/[id]</Link>{' '}
           post-J1.
         </p>
       </footer>
