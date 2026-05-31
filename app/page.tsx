@@ -281,6 +281,10 @@ function VentanaCard({
             <KvRow label="CTR global" value={fmtPercent(data.ctr_global)} />
             <KvRow label="CPC global" value={fmtCurrency(data.cpc_global)} />
             <KvRow label="Costo por Landing View" value={fmtCurrency(data.cpl_global)} />
+            <KvRow
+              label={`CAC (${data.cierres_en_ventana} cliente${data.cierres_en_ventana === 1 ? '' : 's'})`}
+              value={data.cac !== null ? fmtCurrency(data.cac) : '—'}
+            />
           </Section>
         </>
       )}

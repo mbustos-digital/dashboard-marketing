@@ -30,11 +30,15 @@ export type MarketingWindow = {
   reach: number;
   spend_usd: number;
 
+  // Cierres en la ventana (por fecha_cierre)
+  cierres_en_ventana: number;
+
   // Derivadas
   ctr_global: number | null;
   cpc_global: number | null;
   cpm_global: number | null;
   cpl_global: number | null;
+  cac: number | null;              // spend_usd / cierres_en_ventana (MXN por cliente)
 
   // Ratios "1 de cada X"
   ratio_imp_landing: number | null;
@@ -124,8 +128,8 @@ export async function getMarketingWindow(
   const thanks_published_at = isoToFecha(thanksLatest?.raw_payload?.published_at);
   const thanks_prep_published_at = isoToFecha(thanksPrepLatest?.raw_payload?.published_at);
 
-  // Query paralelas: meta + youtube + leads (agendamientos)
-  const [metaRes, ytRes, leadsRes] = await Promise.all([
+  // Query paralelas: meta + youtube + leads (agendamientos) + cierres
+  const [metaRes, ytRes, leadsRes, cierresRes] = await Promise.all([
     supabase
       .from('marketing_metrics_daily')
       .select('fecha, impressions, landing_page_views, clicks, link_clicks, reach, spend')
@@ -143,15 +147,23 @@ export async function getMarketingWindow(
       .select('id', { count: 'exact', head: true })
       .gte('fecha_agenda', start)
       .lte('fecha_agenda', end),
+    supabase
+      .from('leads')
+      .select('id', { count: 'exact', head: true })
+      .eq('cerro', true)
+      .gte('fecha_cierre', start)
+      .lte('fecha_cierre', end),
   ]);
 
   if (metaRes.error) throw new Error(`Query Meta falló: ${metaRes.error.message}`);
   if (ytRes.error) throw new Error(`Query YouTube falló: ${ytRes.error.message}`);
   if (leadsRes.error) throw new Error(`Query leads falló: ${leadsRes.error.message}`);
+  if (cierresRes.error) throw new Error(`Query cierres falló: ${cierresRes.error.message}`);
 
   const metaRows = (metaRes.data ?? []) as MetaRow[];
   const ytRows = (ytRes.data ?? []) as YouTubeRow[];
   const agendamientos = leadsRes.count ?? 0;
+  const cierres_en_ventana = cierresRes.count ?? 0;
 
   // ── Meta aggregates ──
   const impressions = sum(metaRows.map((r) => r.impressions));
@@ -221,10 +233,13 @@ export async function getMarketingWindow(
     reach,
     spend_usd,
 
+    cierres_en_ventana,
+
     ctr_global: safeDiv(clicks, impressions) !== null ? safeDiv(clicks, impressions)! * 100 : null,
     cpc_global: safeDiv(spend_usd, clicks),
     cpm_global: safeDiv(spend_usd, impressions) !== null ? safeDiv(spend_usd, impressions)! * 1000 : null,
     cpl_global: safeDiv(spend_usd, landing_page_views),
+    cac: cierres_en_ventana > 0 ? safeDiv(spend_usd, cierres_en_ventana) : null,
 
     ratio_imp_landing,
     ratio_landing_vsl,
