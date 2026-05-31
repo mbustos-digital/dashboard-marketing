@@ -12,6 +12,7 @@
 
 import { getSupabaseServer } from './supabase';
 import type { MarketingMetricRow } from './types';
+import { fetchYouTubeAnalyticsDaily } from './youtube-analytics';
 
 const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3';
 
@@ -138,36 +139,6 @@ export async function fetchYouTubeStats(videoId: string): Promise<YouTubeStatsRa
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Lee del DB la fila YouTube del día anterior para el mismo video y devuelve
- * el cumulative que guardamos en su raw_payload (o null si no hay).
- */
-async function getYesterdayCumulative(
-  videoId: string,
-  fechaAyer: string,
-): Promise<number | null> {
-  const supabase = getSupabaseServer();
-  // "Día anterior a la fecha que estamos procesando" = (fecha - 1 día)
-  // pero para nuestro flujo basta con "el día calendario anterior":
-  const [y, m, d] = fechaAyer.split('-').map(Number);
-  const dt = new Date(Date.UTC(y, m - 1, d));
-  dt.setUTCDate(dt.getUTCDate() - 1);
-  const anteayer = `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`;
-
-  const { data, error } = await supabase
-    .from('marketing_metrics_daily')
-    .select('raw_payload')
-    .eq('plataforma', 'youtube')
-    .eq('youtube_video_id', videoId)
-    .eq('fecha', anteayer)
-    .maybeSingle();
-
-  if (error || !data) return null;
-
-  const payload = data.raw_payload as { cumulative_views?: number } | null;
-  return payload?.cumulative_views ?? null;
-}
-
-/**
  * Tipos de video que trackeamos. 'thanks' es el video principal de la página
  * Thanks (etapa 5 del funnel). 'thanks_prep' es el corto de preparación que
  * mide alcance de la página, no intent.
@@ -175,7 +146,8 @@ async function getYesterdayCumulative(
 export type VideoType = 'vsl' | 'thanks' | 'thanks_prep';
 
 /**
- * Procesa UN video (VSL, Thanks o Thanks_prep): fetch + calcular delta + upsert.
+ * Procesa UN video (VSL, Thanks o Thanks_prep) usando Camino B (Analytics API).
+ * Obtiene vistas DIARIAS reales del día indicado y las upsertea.
  * @returns el row insertado (para logging)
  */
 export async function processVideo(
@@ -184,19 +156,20 @@ export async function processVideo(
   fecha: string,
 ): Promise<{
   inserted: boolean;
-  daily_views: number | null;
-  cumulative_views: number;
+  daily_views: number;
   title: string;
 }> {
-  const stats = await fetchYouTubeStats(videoId);
-  const ayerCum = await getYesterdayCumulative(videoId, fecha);
+  // Trae stats del día via Analytics API (vistas REALES de ese día, no cumulativo)
+  const daily = await fetchYouTubeAnalyticsDaily(videoId, fecha, fecha);
+  const stat = daily[0]; // 0 o 1 fila
 
-  // Daily delta. Si no hay baseline ayer, null. Si delta es negativa
-  // (raro pero puede pasar si Meta corrige stats), también null.
-  let dailyViews: number | null = null;
-  if (ayerCum !== null) {
-    const delta = stats.viewCount - ayerCum;
-    dailyViews = delta >= 0 ? delta : null;
+  // También conseguimos el title via Data API para el log
+  let title = '';
+  try {
+    const dataStats = await fetchYouTubeStats(videoId);
+    title = dataStats.title;
+  } catch {
+    // si Data API falla por cuota o whatever, no es bloqueante
   }
 
   const row: MarketingMetricRow = {
@@ -225,17 +198,14 @@ export async function processVideo(
 
     youtube_video_id: videoId,
     youtube_video_type: videoType,
-    youtube_views: dailyViews,
-    youtube_minutes_watched: null, // requeriría Analytics API (Camino B)
-    youtube_avg_view_duration: null, // requeriría Analytics API (Camino B)
+    youtube_views: stat?.views ?? 0,
+    youtube_minutes_watched: stat?.estimated_minutes_watched ?? 0,
+    youtube_avg_view_duration: stat?.average_view_duration ?? 0,
 
     raw_payload: {
-      cumulative_views: stats.viewCount,
-      cumulative_likes: stats.likeCount,
-      cumulative_comments: stats.commentCount,
-      snapshot_at: stats.snapshotAt,
-      title: stats.title,
-      published_at: stats.publishedAt,
+      source: 'youtube-analytics-api',
+      had_data: !!stat,
+      title,
     },
   };
 
@@ -255,9 +225,8 @@ export async function processVideo(
 
   return {
     inserted: true,
-    daily_views: dailyViews,
-    cumulative_views: stats.viewCount,
-    title: stats.title,
+    daily_views: stat?.views ?? 0,
+    title,
   };
 }
 
@@ -271,8 +240,7 @@ export async function processAllVideos(
   videoId: string;
   videoType: VideoType;
   status: 'ok' | 'skipped' | 'error';
-  daily_views?: number | null;
-  cumulative_views?: number;
+  daily_views?: number;
   title?: string;
   error?: string;
 }>> {
@@ -280,8 +248,7 @@ export async function processAllVideos(
     videoId: string;
     videoType: VideoType;
     status: 'ok' | 'skipped' | 'error';
-    daily_views?: number | null;
-    cumulative_views?: number;
+    daily_views?: number;
     title?: string;
     error?: string;
   }> = [];
@@ -304,7 +271,6 @@ export async function processAllVideos(
         videoType: v.type,
         status: 'ok',
         daily_views: r.daily_views,
-        cumulative_views: r.cumulative_views,
         title: r.title,
       });
     } catch (err) {
