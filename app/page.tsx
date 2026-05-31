@@ -218,17 +218,57 @@ function VentanaCard({
           <Section title="Funnel">
             <StageRow num="1" label="Impresiones Meta" value={fmtNumber(data.impressions)} highlight />
             <StageRow num="2" label="Visitas Landing" value={fmtNumber(data.landing_page_views)} highlight />
-            <StageRow num="3" label="Vistas Video VSL" value="—" pending="Fase 3" />
+            {data.vsl_views !== null ? (
+              <StageRow
+                num="3"
+                label="Vistas Video VSL"
+                value={fmtNumber(data.vsl_views)}
+                highlight
+                note={data.vsl_days_baseline_only > 0 ? `${data.vsl_days_baseline_only}d baseline` : undefined}
+              />
+            ) : (
+              <StageRow num="3" label="Vistas Video VSL" value="—" pending="Fase 3" />
+            )}
             <StageRow num="4" label="Agendamientos" value="—" pending="Fase 4" />
-            <StageRow num="5" label="Vistas Video Thanks" value="—" pending="Fase 3" />
+            {data.thanks_views !== null ? (
+              <StageRow num="5" label="Vistas Video Thanks" value={fmtNumber(data.thanks_views)} highlight />
+            ) : (
+              <StageRow num="5" label="Vistas Video Thanks" value="—" pending="Fase 3" />
+            )}
           </Section>
 
           {/* RATIOS */}
           <Section title="Ratios (1 de cada X)">
-            <RatioRow label="Impresiones → Landing" value={fmtRatio(data.ratio_imp_landing)} />
-            <RatioRow label="Landing → VSL" value="—" pending="Fase 3" />
-            <RatioRow label="VSL → Agendamiento" value="—" pending="Fase 3+4" />
-            <RatioRow label="Agendamiento → Thanks" value="—" pending="Fase 3+4" />
+            {(() => {
+              // Identificar el peor ratio (mayor X) entre los calculables
+              const calculables: Array<{ label: string; value: number }> = [];
+              if (data.ratio_imp_landing !== null) calculables.push({ label: 'imp_landing', value: data.ratio_imp_landing });
+              if (data.ratio_landing_vsl !== null) calculables.push({ label: 'landing_vsl', value: data.ratio_landing_vsl });
+              const peorLabel =
+                calculables.length >= 2
+                  ? calculables.reduce((max, r) => (r.value > max.value ? r : max)).label
+                  : null;
+              return (
+                <>
+                  <RatioRow
+                    label="Impresiones → Landing"
+                    value={fmtRatio(data.ratio_imp_landing)}
+                    isPeor={peorLabel === 'imp_landing'}
+                  />
+                  {data.ratio_landing_vsl !== null ? (
+                    <RatioRow
+                      label="Landing → VSL"
+                      value={fmtRatio(data.ratio_landing_vsl)}
+                      isPeor={peorLabel === 'landing_vsl'}
+                    />
+                  ) : (
+                    <RatioRow label="Landing → VSL" value="—" pending={data.vsl_views === null ? 'Fase 3' : 'sin datos'} />
+                  )}
+                  <RatioRow label="VSL → Agendamiento" value="—" pending="Fase 3+4" />
+                  <RatioRow label="Agendamiento → Thanks" value="—" pending="Fase 3+4" />
+                </>
+              );
+            })()}
           </Section>
 
           {/* INVERSIÓN */}
@@ -269,12 +309,14 @@ function StageRow({
   value,
   highlight,
   pending,
+  note,
 }: {
   num: string;
   label: string;
   value: string;
   highlight?: boolean;
   pending?: string;
+  note?: string;
 }) {
   const isPending = !!pending;
   return (
@@ -294,6 +336,15 @@ function StageRow({
         </span>
       </div>
       <div className="flex items-center gap-2 shrink-0">
+        {note && (
+          <span
+            className="text-sm px-1.5 py-0.5 rounded"
+            style={{ background: '#1a1a1a', color: 'var(--text-dim)' }}
+            title="Días con solo snapshot baseline, sin delta diario calculable"
+          >
+            {note}
+          </span>
+        )}
         {pending && (
           <span
             className="text-sm px-1.5 py-0.5 rounded"
@@ -323,12 +374,19 @@ function RatioRow({
   label,
   value,
   pending,
+  isPeor,
 }: {
   label: string;
   value: string;
   pending?: string;
+  isPeor?: boolean;
 }) {
   const isPending = !!pending;
+  const valueColor = isPending
+    ? 'var(--text-pending)'
+    : isPeor
+    ? 'var(--accent-orange)'
+    : 'var(--accent-green)';
   return (
     <div className="flex items-baseline justify-between gap-3 py-1.5">
       <span
@@ -338,6 +396,15 @@ function RatioRow({
         {label}
       </span>
       <div className="flex items-center gap-2 shrink-0">
+        {isPeor && !isPending && (
+          <span
+            className="text-sm px-1.5 py-0.5 rounded"
+            style={{ background: '#3a1810', color: 'var(--accent-orange)' }}
+            title="Peor ratio del funnel — punto a optimizar"
+          >
+            peor
+          </span>
+        )}
         {pending && (
           <span
             className="text-sm px-1.5 py-0.5 rounded"
@@ -346,10 +413,7 @@ function RatioRow({
             {pending}
           </span>
         )}
-        <span
-          className="text-lg font-medium tabular-nums"
-          style={{ color: isPending ? 'var(--text-pending)' : 'var(--accent-green)' }}
-        >
+        <span className="text-lg font-medium tabular-nums" style={{ color: valueColor }}>
           {value}
         </span>
       </div>
