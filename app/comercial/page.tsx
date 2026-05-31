@@ -118,7 +118,7 @@ export default async function ComercialPage() {
             showCiclo={true}
           />
 
-          <p className="text-sm" style={{ color: 'var(--text-pending)' }}>
+          <p className="text-base" style={{ color: 'var(--text-pending)' }}>
             🟢 Madura (≥14d desde último J1, tasa confiable) · 🟡 Madurando
             (5-13d, % parcial) · ⚪ Reciente (&lt;5d, no juzgar todavía). El
             <strong style={{ color: 'var(--accent-green)' }}> ratio joya </strong>
@@ -154,39 +154,39 @@ function CohortesTable({
       className="rounded-xl border overflow-hidden"
       style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
     >
-      <header className="px-6 py-5 border-b" style={{ borderColor: 'var(--card-border)' }}>
+      <header className="px-7 py-6 border-b" style={{ borderColor: 'var(--card-border)' }}>
         <h2
-          className="text-[28px]"
+          className="text-[36px]"
           style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500 }}
         >
           {title}
         </h2>
-        <p className="text-base mt-1" style={{ color: 'var(--text-dim)' }}>
+        <p className="text-lg mt-1" style={{ color: 'var(--text-dim)' }}>
           {subtitle}
         </p>
       </header>
 
       {cohortes.length === 0 ? (
-        <div className="p-8 text-center text-base" style={{ color: 'var(--text-dim)' }}>
+        <div className="p-10 text-center text-lg" style={{ color: 'var(--text-dim)' }}>
           Sin cohortes todavía. Cuando tengas leads con fecha de J1, aparecerán aquí.
         </div>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full text-base">
+          <table className="w-full text-lg">
             <thead>
               <tr
-                className="text-sm uppercase tracking-wider text-left"
+                className="text-base uppercase tracking-wider text-left"
                 style={{ background: '#0f0f0f', color: 'var(--text-dim)' }}
               >
-                <th className="px-4 py-3">{fechaColLabel}</th>
-                <th className="px-3 py-3 text-right">J1 total</th>
-                <th className="px-3 py-3 text-right">Asistió</th>
-                <th className="px-3 py-3 text-right">Limpias</th>
-                <th className="px-3 py-3 text-right">Cierres</th>
-                <th className="px-3 py-3 text-right">Tasa cierre</th>
-                {showCiclo && <th className="px-3 py-3 text-right">Ciclo (d)</th>}
-                <th className="px-3 py-3 text-right">Ventas</th>
-                <th className="px-4 py-3">Estado</th>
+                <th className="px-5 py-4">{fechaColLabel}</th>
+                <th className="px-4 py-4 text-right">J1 total</th>
+                <th className="px-4 py-4 text-right">Asistió</th>
+                <th className="px-4 py-4 text-right">Limpias</th>
+                <th className="px-4 py-4 text-right">Cierres</th>
+                <th className="px-4 py-4 text-right">Tasa cierre</th>
+                {showCiclo && <th className="px-4 py-4 text-right">Ciclo (d)</th>}
+                <th className="px-4 py-4 text-right">Ventas</th>
+                <th className="px-5 py-4">Estado</th>
               </tr>
             </thead>
             <tbody>
@@ -201,17 +201,17 @@ function CohortesTable({
                     className="border-t"
                     style={{ borderColor: 'var(--card-border)' }}
                   >
-                    <td className="px-4 py-3 font-medium">{fechaFormat(fechaInicio)}</td>
-                    <td className="px-3 py-3 text-right tabular-nums">{fmtNumber(c.total_j1)}</td>
-                    <td className="px-3 py-3 text-right tabular-nums">
+                    <td className="px-5 py-4 font-medium">{fechaFormat(fechaInicio)}</td>
+                    <td className="px-4 py-4 text-right tabular-nums">{fmtNumber(c.total_j1)}</td>
+                    <td className="px-4 py-4 text-right tabular-nums">
                       {fmtNumber(c.asistencias)}
                     </td>
-                    <td className="px-3 py-3 text-right tabular-nums">{fmtNumber(c.limpias)}</td>
-                    <td className="px-3 py-3 text-right tabular-nums">{fmtNumber(c.cierres)}</td>
-                    <td className="px-3 py-3 text-right tabular-nums">{tasaDisplay}</td>
+                    <td className="px-4 py-4 text-right tabular-nums">{fmtNumber(c.limpias)}</td>
+                    <td className="px-4 py-4 text-right tabular-nums">{fmtNumber(c.cierres)}</td>
+                    <td className="px-4 py-4 text-right tabular-nums">{tasaDisplay}</td>
                     {showCiclo && (
                       <td
-                        className="px-3 py-3 text-right tabular-nums"
+                        className="px-4 py-4 text-right tabular-nums"
                         style={{ color: 'var(--text-dim)' }}
                       >
                         {cohorteMes.dias_promedio_ciclo !== null &&
@@ -220,7 +220,7 @@ function CohortesTable({
                           : '—'}
                       </td>
                     )}
-                    <td className="px-3 py-3 text-right tabular-nums">
+                    <td className="px-4 py-4 text-right tabular-nums">
                       {c.cierres > 0 ? (
                         <span style={{ color: 'var(--accent-green)' }}>
                           {fmtCurrency(c.ingreso_total_usd)}
@@ -229,9 +229,9 @@ function CohortesTable({
                         '—'
                       )}
                     </td>
-                    <td className="px-4 py-3">
-                      <span className="inline-flex items-center gap-2 text-sm">
-                        <span>{emojiMadurez(c.estado_madurez)}</span>
+                    <td className="px-5 py-4">
+                      <span className="inline-flex items-center gap-2 text-base">
+                        <span className="text-lg">{emojiMadurez(c.estado_madurez)}</span>
                         <span style={{ color: 'var(--text-dim)' }}>{c.estado_madurez}</span>
                       </span>
                     </td>
@@ -255,7 +255,7 @@ function renderTasa(tasa: number | null, estado: EstadoMadurezCohorte): React.Re
   if (estado === 'madurando') {
     return (
       <span style={{ color: 'var(--text-dim)' }}>
-        {tasaStr} <span className="text-sm">(parcial)</span>
+        {tasaStr} <span className="text-base">(parcial)</span>
       </span>
     );
   }
@@ -270,13 +270,13 @@ function renderTasa(tasa: number | null, estado: EstadoMadurezCohorte): React.Re
 function EmptyState() {
   return (
     <div
-      className="rounded-xl border p-12 text-center"
+      className="rounded-xl border p-14 text-center"
       style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
     >
-      <p className="text-lg mb-4" style={{ color: 'var(--text-dim)' }}>
+      <p className="text-xl mb-4" style={{ color: 'var(--text-dim)' }}>
         Aún no hay leads con fecha de Junta 1.
       </p>
-      <p className="text-base" style={{ color: 'var(--text-pending)' }}>
+      <p className="text-lg" style={{ color: 'var(--text-pending)' }}>
         Cuando alguien agende vía Calendly (webhook automático) o crees uno manual en /leads,
         y le pongas fecha de J1, aparecerá agrupado en cohortes aquí.
       </p>
@@ -290,7 +290,7 @@ function ErrorCard({ message }: { message: string }) {
       className="rounded-lg p-6 border"
       style={{ borderColor: 'var(--accent-orange)', background: '#2a1410' }}
     >
-      <p className="font-semibold mb-1" style={{ color: 'var(--accent-orange)' }}>
+      <p className="text-lg font-semibold mb-1" style={{ color: 'var(--accent-orange)' }}>
         Error consultando Supabase
       </p>
       <p className="text-base font-mono" style={{ color: 'var(--text-dim)' }}>
