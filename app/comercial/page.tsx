@@ -33,9 +33,9 @@ function fmtNumber(n: number | null | undefined): string {
 
 function fmtCurrency(n: number | null | undefined): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return '—';
-  return new Intl.NumberFormat('es-MX', {
+  return new Intl.NumberFormat('en-US', {
     style: 'currency',
-    currency: 'MXN',
+    currency: 'USD',
     maximumFractionDigits: 0,
   }).format(n);
 }
@@ -185,7 +185,7 @@ function CohortesTable({
                 <th className="px-3 py-3 text-right">Cierres</th>
                 <th className="px-3 py-3 text-right">Tasa cierre</th>
                 {showCiclo && <th className="px-3 py-3 text-right">Ciclo (d)</th>}
-                <th className="px-3 py-3 text-right">Ingreso</th>
+                <th className="px-3 py-3 text-right">Ventas</th>
                 <th className="px-4 py-3">Estado</th>
               </tr>
             </thead>

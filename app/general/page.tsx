@@ -30,11 +30,20 @@ function fmtNumber(n: number | null | undefined): string {
   return new Intl.NumberFormat('es-MX').format(Math.round(n));
 }
 
-function fmtCurrency(n: number | null | undefined): string {
+function fmtMXN(n: number | null | undefined): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return '—';
   return new Intl.NumberFormat('es-MX', {
     style: 'currency',
     currency: 'MXN',
+    maximumFractionDigits: 0,
+  }).format(n);
+}
+
+function fmtUSD(n: number | null | undefined): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return '—';
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
     maximumFractionDigits: 0,
   }).format(n);
 }
@@ -188,7 +197,7 @@ export default async function GeneralPage() {
               />
               <KPI
                 label="Inversión total"
-                value={fmtCurrency(mes.spend_usd)}
+                value={fmtMXN(mes.spend_usd)}
                 accent="yellow"
               />
             </Grid>
@@ -221,8 +230,8 @@ export default async function GeneralPage() {
                 hint="Cierres ÷ Limpias"
               />
               <KPI
-                label="Ingreso acumulado"
-                value={fmtCurrency(maduras.ingreso_total_usd)}
+                label="Ventas acumuladas"
+                value={fmtUSD(maduras.ingreso_total_usd)}
                 accent="green"
               />
             </Grid>

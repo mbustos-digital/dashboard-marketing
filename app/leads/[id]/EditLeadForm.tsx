@@ -193,7 +193,7 @@ export function EditLeadForm({ lead }: { lead: Lead }) {
 
         {mostrarCierreCampos && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mt-5">
-            <Field label="Monto del cierre (MXN)" required>
+            <Field label="Monto del cierre (USD)" required>
               <input
                 type="number"
                 step="0.01"
