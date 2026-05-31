@@ -29,7 +29,7 @@ function fmtCurrency(n: number | null | undefined): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return '—';
   return new Intl.NumberFormat('es-MX', {
     style: 'currency',
-    currency: 'USD',
+    currency: 'MXN',
     maximumFractionDigits: 2,
   }).format(n);
 }
@@ -83,12 +83,12 @@ export default async function Page() {
       {/* HEADER */}
       <header className="mb-10">
         <h1
-          className="text-4xl md:text-5xl tracking-tight"
+          className="text-[42px] md:text-[56px] tracking-tight leading-tight"
           style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500 }}
         >
           Dashboard Marketing
         </h1>
-        <p className="mt-1 text-sm" style={{ color: 'var(--text-dim)' }}>
+        <p className="mt-1 text-base" style={{ color: 'var(--text-dim)' }}>
           Mauricio Bustos · Datos actualizados a {fmtFechaCorta(ayer)}
         </p>
       </header>
@@ -135,7 +135,7 @@ export default async function Page() {
 
       {/* FOOTER */}
       <footer className="mt-12 pt-6 border-t" style={{ borderColor: 'var(--card-border)' }}>
-        <p className="text-xs" style={{ color: 'var(--text-pending)' }}>
+        <p className="text-sm" style={{ color: 'var(--text-pending)' }}>
           Estado: Fase 2 en producción. Cron Meta corriendo diario a las 6:00 AM Tijuana.
           Pendientes: YouTube (Fase 3), captura manual de leads (Fase 4), pestaña Comercial y Vista General (Fase 5).
         </p>
@@ -151,7 +151,7 @@ export default async function Page() {
 function TabActive({ label }: { label: string }) {
   return (
     <div
-      className="px-4 py-3 -mb-px border-b-2 text-sm font-medium"
+      className="px-4 py-3 -mb-px border-b-2 text-base font-medium"
       style={{ borderColor: 'var(--accent-yellow)', color: 'var(--accent-yellow)' }}
     >
       {label}
@@ -162,12 +162,12 @@ function TabActive({ label }: { label: string }) {
 function TabDisabled({ label, badge }: { label: string; badge: string }) {
   return (
     <div
-      className="px-4 py-3 text-sm flex items-center gap-2"
+      className="px-4 py-3 text-base flex items-center gap-2"
       style={{ color: 'var(--text-pending)' }}
     >
       <span>{label}</span>
       <span
-        className="px-2 py-0.5 text-[10px] rounded-full"
+        className="px-2 py-0.5 text-xs rounded-full"
         style={{ background: 'var(--card-bg)', color: 'var(--text-dim)' }}
       >
         {badge}
@@ -197,12 +197,12 @@ function VentanaCard({
       {/* Header card */}
       <header className="mb-5">
         <h2
-          className="text-2xl"
+          className="text-[28px]"
           style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500 }}
         >
           {title}
         </h2>
-        <p className="text-xs mt-1" style={{ color: 'var(--text-dim)' }}>
+        <p className="text-sm mt-1" style={{ color: 'var(--text-dim)' }}>
           {subtitle}
           {data && data.dias_con_datos > 0 && (
             <span> · {data.dias_con_datos} {data.dias_con_datos === 1 ? 'día' : 'días'} con datos</span>
@@ -211,7 +211,7 @@ function VentanaCard({
       </header>
 
       {data === null ? (
-        <p className="text-sm" style={{ color: 'var(--text-pending)' }}>Sin datos</p>
+        <p className="text-base" style={{ color: 'var(--text-pending)' }}>Sin datos</p>
       ) : (
         <>
           {/* FUNNEL */}
@@ -253,7 +253,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return (
     <div className="mb-5 last:mb-0">
       <h3
-        className="text-[10px] uppercase tracking-widest mb-2"
+        className="text-xs uppercase tracking-widest mb-2"
         style={{ color: 'var(--text-dim)' }}
       >
         {title}
@@ -281,13 +281,13 @@ function StageRow({
     <div className="flex items-baseline justify-between gap-3 py-1.5">
       <div className="flex items-baseline gap-2 min-w-0">
         <span
-          className="text-xs w-4 text-center"
+          className="text-sm w-4 text-center"
           style={{ color: isPending ? 'var(--text-pending)' : 'var(--text-dim)' }}
         >
           {num}
         </span>
         <span
-          className="text-sm truncate"
+          className="text-base truncate"
           style={{ color: isPending ? 'var(--text-pending)' : 'var(--text)' }}
         >
           {label}
@@ -296,14 +296,14 @@ function StageRow({
       <div className="flex items-center gap-2 shrink-0">
         {pending && (
           <span
-            className="text-[10px] px-1.5 py-0.5 rounded"
+            className="text-xs px-1.5 py-0.5 rounded"
             style={{ background: '#1a1a1a', color: 'var(--text-pending)' }}
           >
             {pending}
           </span>
         )}
         <span
-          className="text-lg font-semibold tabular-nums"
+          className="text-xl font-semibold tabular-nums"
           style={{
             color: isPending
               ? 'var(--text-pending)'
@@ -332,7 +332,7 @@ function RatioRow({
   return (
     <div className="flex items-baseline justify-between gap-3 py-1.5">
       <span
-        className="text-sm truncate"
+        className="text-base truncate"
         style={{ color: isPending ? 'var(--text-pending)' : 'var(--text)' }}
       >
         {label}
@@ -340,14 +340,14 @@ function RatioRow({
       <div className="flex items-center gap-2 shrink-0">
         {pending && (
           <span
-            className="text-[10px] px-1.5 py-0.5 rounded"
+            className="text-xs px-1.5 py-0.5 rounded"
             style={{ background: '#1a1a1a', color: 'var(--text-pending)' }}
           >
             {pending}
           </span>
         )}
         <span
-          className="text-sm font-medium tabular-nums"
+          className="text-base font-medium tabular-nums"
           style={{ color: isPending ? 'var(--text-pending)' : 'var(--accent-green)' }}
         >
           {value}
@@ -360,10 +360,10 @@ function RatioRow({
 function KvRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-baseline justify-between gap-3 py-1">
-      <span className="text-sm" style={{ color: 'var(--text-dim)' }}>
+      <span className="text-base" style={{ color: 'var(--text-dim)' }}>
         {label}
       </span>
-      <span className="text-sm font-medium tabular-nums">{value}</span>
+      <span className="text-base font-medium tabular-nums">{value}</span>
     </div>
   );
 }
