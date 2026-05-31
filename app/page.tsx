@@ -6,13 +6,14 @@
 // se muestran en gris con etiqueta "pendiente".
 // =============================================================================
 
-import Link from 'next/link';
 import { getMarketingWindow, type MarketingWindow } from '@/lib/queries';
 import {
   ayerEnTijuana,
   lunesActualEnTijuana,
   primerDiaDelMesEnTijuana,
 } from '@/lib/date-utils';
+import { DashboardHeader } from './_components/DashboardHeader';
+import { DashboardTabs } from './_components/DashboardTabs';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -81,38 +82,8 @@ export default async function Page() {
 
   return (
     <main className="min-h-screen w-full px-6 py-8 md:px-12 md:py-12 bg-[var(--bg)] text-[var(--text)]">
-      {/* HEADER */}
-      <header className="mb-10 flex items-end justify-between gap-4 flex-wrap">
-        <div>
-          <h1
-            className="text-[46px] md:text-[62px] tracking-tight leading-tight"
-            style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500 }}
-          >
-            Dashboard Marketing
-          </h1>
-          <p className="mt-1 text-lg" style={{ color: 'var(--text-dim)' }}>
-            Mauricio Bustos · Datos actualizados a {fmtFechaCorta(ayer)}
-          </p>
-        </div>
-        <Link
-          href="/leads"
-          className="px-5 py-3 rounded-lg font-medium text-lg border"
-          style={{
-            background: 'transparent',
-            borderColor: 'var(--accent-yellow)',
-            color: 'var(--accent-yellow)',
-          }}
-        >
-          Leads →
-        </Link>
-      </header>
-
-      {/* TABS */}
-      <nav className="flex items-center gap-1 mb-8 border-b" style={{ borderColor: 'var(--card-border)' }}>
-        <TabActive label="Marketing" />
-        <TabDisabled label="Comercial" badge="Fase 4" />
-        <TabDisabled label="Vista General" badge="Fase 5" />
-      </nav>
+      <DashboardHeader fechaAyer={ayer} />
+      <DashboardTabs active="marketing" />
 
       {/* CONTENT */}
       {errorMsg ? (
@@ -155,38 +126,6 @@ export default async function Page() {
         </p>
       </footer>
     </main>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Tab components
-// ─────────────────────────────────────────────────────────────────────────────
-
-function TabActive({ label }: { label: string }) {
-  return (
-    <div
-      className="px-4 py-3 -mb-px border-b-2 text-lg font-medium"
-      style={{ borderColor: 'var(--accent-yellow)', color: 'var(--accent-yellow)' }}
-    >
-      {label}
-    </div>
-  );
-}
-
-function TabDisabled({ label, badge }: { label: string; badge: string }) {
-  return (
-    <div
-      className="px-4 py-3 text-lg flex items-center gap-2"
-      style={{ color: 'var(--text-pending)' }}
-    >
-      <span>{label}</span>
-      <span
-        className="px-2 py-0.5 text-sm rounded-full"
-        style={{ background: 'var(--card-bg)', color: 'var(--text-dim)' }}
-      >
-        {badge}
-      </span>
-    </div>
   );
 }
 

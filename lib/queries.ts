@@ -173,3 +173,124 @@ export async function getMarketingWindow(
     thanks_prep_days_baseline_only,
   };
 }
+
+// =============================================================================
+// COHORTES COMERCIALES — Fase 5
+// =============================================================================
+
+export type EstadoMadurezCohorte = 'madura' | 'madurando' | 'reciente';
+
+export type CohorteSemana = {
+  semana_inicio: string;
+  total_j1: number;
+  asistencias: number;
+  limpias: number;
+  cierres: number;
+  ingreso_total_usd: number;
+  ultima_j1_cohorte: string;
+  dias_desde_ultima_j1: number;
+  estado_madurez: EstadoMadurezCohorte;
+};
+
+export type CohorteMes = {
+  mes_inicio: string;
+  total_j1: number;
+  asistencias: number;
+  limpias: number;
+  cierres: number;
+  ingreso_total_usd: number;
+  ultima_j1_cohorte: string;
+  dias_desde_ultima_j1: number;
+  dias_promedio_ciclo: number | null;
+  estado_madurez: EstadoMadurezCohorte;
+};
+
+/**
+ * Últimas N semanas de cohortes, más recientes primero.
+ */
+export async function listCohortesSemanales(limit = 8): Promise<CohorteSemana[]> {
+  const supabase = getSupabaseServer();
+  const { data, error } = await supabase
+    .from('v_cohortes_semanales')
+    .select('*')
+    .order('semana_inicio', { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`Query v_cohortes_semanales falló: ${error.message}`);
+  return (data ?? []) as CohorteSemana[];
+}
+
+/**
+ * Últimos N meses de cohortes, más recientes primero.
+ */
+export async function listCohortesMensuales(limit = 6): Promise<CohorteMes[]> {
+  const supabase = getSupabaseServer();
+  const { data, error } = await supabase
+    .from('v_cohortes_mensuales')
+    .select('*')
+    .order('mes_inicio', { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`Query v_cohortes_mensuales falló: ${error.message}`);
+  return (data ?? []) as CohorteMes[];
+}
+
+export type ResumenComercialMaduras = {
+  // Solo cohortes madura — donde la tasa de cierre es confiable
+  total_j1: number;
+  asistencias: number;
+  limpias: number;
+  cierres: number;
+  ingreso_total_usd: number;
+  cohortes_maduras_count: number;
+  // Tasa de cierre = ratio joya = cierres / limpias
+  tasa_cierre_madura: number | null; // 0–100
+  // Ciclo promedio (días J1 → cierre) — pondera por cohortes mensuales maduras
+  dias_promedio_ciclo: number | null;
+};
+
+/**
+ * Agrega TODAS las cohortes mensuales con estado_madurez='madura'.
+ * Es la base honesta para tomar decisiones — las cohortes recientes están
+ * incompletas y mentirían en los promedios.
+ */
+export async function getResumenComercialMaduras(): Promise<ResumenComercialMaduras> {
+  const supabase = getSupabaseServer();
+  const { data, error } = await supabase
+    .from('v_cohortes_mensuales')
+    .select('*')
+    .eq('estado_madurez', 'madura');
+  if (error) throw new Error(`Query maduras falló: ${error.message}`);
+  const cohortes = (data ?? []) as CohorteMes[];
+
+  const total_j1 = cohortes.reduce((s, c) => s + (c.total_j1 ?? 0), 0);
+  const asistencias = cohortes.reduce((s, c) => s + (c.asistencias ?? 0), 0);
+  const limpias = cohortes.reduce((s, c) => s + (c.limpias ?? 0), 0);
+  const cierres = cohortes.reduce((s, c) => s + (c.cierres ?? 0), 0);
+  const ingreso_total_usd = cohortes.reduce((s, c) => s + Number(c.ingreso_total_usd ?? 0), 0);
+
+  // Tasa cierre = cierres / limpias (ratio joya)
+  const tasa_cierre_madura = limpias > 0 ? (cierres / limpias) * 100 : null;
+
+  // Ciclo: promedio ponderado por cierres de cada cohorte
+  const cohortesConCiclo = cohortes.filter(
+    (c) => c.dias_promedio_ciclo !== null && c.cierres > 0,
+  );
+  const totalCierresConCiclo = cohortesConCiclo.reduce((s, c) => s + c.cierres, 0);
+  const dias_promedio_ciclo =
+    totalCierresConCiclo > 0
+      ? cohortesConCiclo.reduce(
+          (s, c) => s + Number(c.dias_promedio_ciclo!) * c.cierres,
+          0,
+        ) / totalCierresConCiclo
+      : null;
+
+  return {
+    total_j1,
+    asistencias,
+    limpias,
+    cierres,
+    ingreso_total_usd,
+    cohortes_maduras_count: cohortes.length,
+    tasa_cierre_madura,
+    dias_promedio_ciclo,
+  };
+}
