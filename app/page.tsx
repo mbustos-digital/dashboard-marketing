@@ -104,58 +104,50 @@ export default async function Page() {
         </div>
       ) : (
         <>
-          {/* CAC ACUMULADO — banner global */}
+          {/* CAC GLOBAL — banner compacto de referencia */}
           {cacGlobal && (
             <section
-              className="mb-6 rounded-xl border p-6 md:p-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
+              className="mb-6 rounded-xl border px-5 py-4 flex flex-wrap items-center justify-between gap-3"
               style={{ background: 'var(--card-bg)', borderColor: 'var(--accent-yellow)' }}
             >
               <div>
-                <p
-                  className="text-sm uppercase tracking-widest mb-1"
+                <span
+                  className="text-sm uppercase tracking-widest"
                   style={{ color: 'var(--text-dim)' }}
                 >
-                  CAC acumulado · todo el histórico
-                </p>
-                <p
-                  className="text-base"
-                  style={{ color: 'var(--text-dim)' }}
-                >
-                  {fmtCurrency(cacGlobal.spend_total_mxn)} gastado en Meta Ads
-                  {' · '}
-                  {cacGlobal.cierres_total} cliente{cacGlobal.cierres_total === 1 ? '' : 's'} adquirido{cacGlobal.cierres_total === 1 ? '' : 's'}
-                </p>
+                  CAC acumulado (todo el histórico)
+                </span>
+                <span className="text-base ml-3" style={{ color: 'var(--text-dim)' }}>
+                  {fmtCurrency(cacGlobal.spend_total_mxn)} ÷ {cacGlobal.cierres_total} cliente{cacGlobal.cierres_total === 1 ? '' : 's'}
+                </span>
               </div>
-              <div className="text-right">
-                <p
-                  className="text-[44px] md:text-[56px] leading-none tracking-tight"
-                  style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500, color: 'var(--accent-yellow)' }}
-                >
-                  {cacGlobal.cac_mxn !== null ? fmtCurrency(cacGlobal.cac_mxn) : '—'}
-                </p>
-                <p className="text-sm mt-1" style={{ color: 'var(--text-pending)' }}>
-                  por cliente
-                </p>
+              <div
+                className="text-[28px] leading-none tracking-tight"
+                style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500, color: 'var(--accent-yellow)' }}
+              >
+                {cacGlobal.cac_mxn !== null ? `${fmtCurrency(cacGlobal.cac_mxn)} / cliente` : '— / cliente'}
               </div>
             </section>
           )}
 
           <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <VentanaCard
-            title="Día anterior"
-            subtitle={fmtFechaCorta(ayer)}
-            data={dia}
-          />
-          <VentanaCard
-            title="Semana en curso"
-            subtitle={`${fmtFechaCorta(lunes)} → ${fmtFechaCorta(ayer)}`}
-            data={semana}
-          />
-          <VentanaCard
-            title="Mes acumulado"
-            subtitle={`${fmtFechaCorta(mesInicio)} → ${fmtFechaCorta(ayer)}`}
-            data={mes}
-          />
+            <VentanaCard
+              title="Día anterior"
+              subtitle={fmtFechaCorta(ayer)}
+              data={dia}
+            />
+            <VentanaCard
+              title="Semana en curso"
+              subtitle={`${fmtFechaCorta(lunes)} → ${fmtFechaCorta(ayer)}`}
+              data={semana}
+              showCAC
+            />
+            <VentanaCard
+              title="Mes acumulado"
+              subtitle={`${fmtFechaCorta(mesInicio)} → ${fmtFechaCorta(ayer)}`}
+              data={mes}
+              showCAC
+            />
           </section>
         </>
       )}
@@ -187,10 +179,12 @@ function VentanaCard({
   title,
   subtitle,
   data,
+  showCAC = false,
 }: {
   title: string;
   subtitle: string;
   data: MarketingWindow | null;
+  showCAC?: boolean;
 }) {
   return (
     <article
@@ -321,6 +315,12 @@ function VentanaCard({
             <KvRow label="CTR global" value={fmtPercent(data.ctr_global)} />
             <KvRow label="CPC global" value={fmtCurrency(data.cpc_global)} />
             <KvRow label="Costo por Landing View" value={fmtCurrency(data.cpl_global)} />
+            {showCAC && (
+              <KvRow
+                label={`CAC (${data.cierres_en_ventana} cliente${data.cierres_en_ventana === 1 ? '' : 's'})`}
+                value={data.cac !== null ? fmtCurrency(data.cac) : '—'}
+              />
+            )}
           </Section>
         </>
       )}
