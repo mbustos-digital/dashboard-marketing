@@ -7,7 +7,7 @@
 // =============================================================================
 
 import Link from 'next/link';
-import { getMarketingWindow, type MarketingWindow } from '@/lib/queries';
+import { getMarketingWindow, getCACAcumulado, type MarketingWindow, type CACAcumulado } from '@/lib/queries';
 import {
   ayerEnTijuana,
   lunesActualEnTijuana,
@@ -70,13 +70,15 @@ export default async function Page() {
   let dia: MarketingWindow | null = null;
   let semana: MarketingWindow | null = null;
   let mes: MarketingWindow | null = null;
+  let cacGlobal: CACAcumulado | null = null;
   let errorMsg: string | null = null;
 
   try {
-    [dia, semana, mes] = await Promise.all([
+    [dia, semana, mes, cacGlobal] = await Promise.all([
       getMarketingWindow(ayer, ayer),
       getMarketingWindow(lunes, ayer),
       getMarketingWindow(mesInicio, ayer),
+      getCACAcumulado(),
     ]);
   } catch (err) {
     errorMsg = err instanceof Error ? err.message : String(err);
@@ -101,7 +103,44 @@ export default async function Page() {
           </p>
         </div>
       ) : (
-        <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <>
+          {/* CAC ACUMULADO — banner global */}
+          {cacGlobal && (
+            <section
+              className="mb-6 rounded-xl border p-6 md:p-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-4"
+              style={{ background: 'var(--card-bg)', borderColor: 'var(--accent-yellow)' }}
+            >
+              <div>
+                <p
+                  className="text-sm uppercase tracking-widest mb-1"
+                  style={{ color: 'var(--text-dim)' }}
+                >
+                  CAC acumulado · todo el histórico
+                </p>
+                <p
+                  className="text-base"
+                  style={{ color: 'var(--text-dim)' }}
+                >
+                  {fmtCurrency(cacGlobal.spend_total_mxn)} gastado en Meta Ads
+                  {' · '}
+                  {cacGlobal.cierres_total} cliente{cacGlobal.cierres_total === 1 ? '' : 's'} adquirido{cacGlobal.cierres_total === 1 ? '' : 's'}
+                </p>
+              </div>
+              <div className="text-right">
+                <p
+                  className="text-[44px] md:text-[56px] leading-none tracking-tight"
+                  style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500, color: 'var(--accent-yellow)' }}
+                >
+                  {cacGlobal.cac_mxn !== null ? fmtCurrency(cacGlobal.cac_mxn) : '—'}
+                </p>
+                <p className="text-sm mt-1" style={{ color: 'var(--text-pending)' }}>
+                  por cliente
+                </p>
+              </div>
+            </section>
+          )}
+
+          <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <VentanaCard
             title="Día anterior"
             subtitle={fmtFechaCorta(ayer)}
@@ -117,7 +156,8 @@ export default async function Page() {
             subtitle={`${fmtFechaCorta(mesInicio)} → ${fmtFechaCorta(ayer)}`}
             data={mes}
           />
-        </section>
+          </section>
+        </>
       )}
 
       {/* FOOTER */}
@@ -281,10 +321,6 @@ function VentanaCard({
             <KvRow label="CTR global" value={fmtPercent(data.ctr_global)} />
             <KvRow label="CPC global" value={fmtCurrency(data.cpc_global)} />
             <KvRow label="Costo por Landing View" value={fmtCurrency(data.cpl_global)} />
-            <KvRow
-              label={`CAC (${data.cierres_en_ventana} cliente${data.cierres_en_ventana === 1 ? '' : 's'})`}
-              value={data.cac !== null ? fmtCurrency(data.cac) : '—'}
-            />
           </Section>
         </>
       )}
