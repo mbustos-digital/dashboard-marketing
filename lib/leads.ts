@@ -210,6 +210,70 @@ export async function deleteLead(id: number): Promise<void> {
   if (error) throw new Error(`Error borrando lead ${id}: ${error.message}`);
 }
 
+/**
+ * Upsert por email — usado por el webhook de Calendly.
+ *
+ * - Si existe lead con ese email: actualiza SOLO los campos que vienen de
+ *   Calendly (nombre, email, fechas, empresa, telefono). NUNCA toca los
+ *   campos manuales (asistio_j1, calificado, cerro, monto, fecha_cierre).
+ * - Si no existe: crea uno nuevo con los datos de Calendly.
+ *
+ * @returns { created: true } si fue insert, { created: false } si fue update.
+ */
+export async function upsertLeadFromCalendly(input: {
+  email: string;
+  nombre: string;
+  fecha_agenda: string;
+  fecha_junta_1: string;
+  empresa?: string | null;
+  telefono?: string | null;
+}): Promise<{ created: boolean; lead: Lead }> {
+  if (!input.email || !input.email.includes('@')) {
+    throw new Error('Email inválido en payload de Calendly');
+  }
+  const emailNorm = input.email.trim().toLowerCase();
+
+  const supabase = getSupabaseServer();
+
+  // Buscar existente por email (case-insensitive vía toLowerCase normalizado)
+  const { data: existing, error: findErr } = await supabase
+    .from('leads')
+    .select('*')
+    .ilike('email', emailNorm)
+    .maybeSingle();
+
+  if (findErr) throw new Error(`Error buscando lead por email: ${findErr.message}`);
+
+  // Payload de Calendly — solo los campos que SÍ tocamos
+  const payload = {
+    nombre: input.nombre.trim(),
+    email: emailNorm,
+    fecha_agenda: input.fecha_agenda,
+    fecha_junta_1: input.fecha_junta_1,
+    empresa: input.empresa?.trim() || null,
+    telefono: input.telefono?.trim() || null,
+  };
+
+  if (existing) {
+    const { data, error } = await supabase
+      .from('leads')
+      .update(payload)
+      .eq('id', existing.id)
+      .select('*')
+      .single();
+    if (error) throw new Error(`Error actualizando lead ${existing.id}: ${error.message}`);
+    return { created: false, lead: data as Lead };
+  }
+
+  const { data, error } = await supabase
+    .from('leads')
+    .insert(payload)
+    .select('*')
+    .single();
+  if (error) throw new Error(`Error creando lead desde Calendly: ${error.message}`);
+  return { created: true, lead: data as Lead };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers de presentación
 // ─────────────────────────────────────────────────────────────────────────────
