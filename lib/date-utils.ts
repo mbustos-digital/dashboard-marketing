@@ -57,3 +57,28 @@ export function esFechaValida(fecha: string): boolean {
     dt.getUTCDate() === d
   );
 }
+
+/**
+ * Devuelve el LUNES de la semana actual en zona Tijuana, formato 'YYYY-MM-DD'.
+ * Si hoy es lunes, devuelve hoy.
+ */
+export function lunesActualEnTijuana(date: Date = new Date()): string {
+  const hoy = hoyEnTijuana(date);
+  const [y, m, d] = hoy.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  // getUTCDay: 0=domingo, 1=lunes, ... 6=sábado
+  // Queremos llegar a lunes: si es domingo (0), restar 6; si es lunes (1), restar 0; etc.
+  const dia = dt.getUTCDay();
+  const offset = dia === 0 ? 6 : dia - 1;
+  return diasAntes(hoy, offset);
+}
+
+/**
+ * Devuelve el primer día del mes actual en zona Tijuana, formato 'YYYY-MM-DD'.
+ */
+export function primerDiaDelMesEnTijuana(date: Date = new Date()): string {
+  const hoy = hoyEnTijuana(date);
+  const [y, m] = hoy.split('-').map(Number);
+  const mm = String(m).padStart(2, '0');
+  return `${y}-${mm}-01`;
+}

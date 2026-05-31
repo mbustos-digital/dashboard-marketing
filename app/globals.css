@@ -1,26 +1,34 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  /* Tema oscuro fijo — el dashboard no respeta prefers-color-scheme */
+  --bg: #0a0a0a;
+  --card-bg: #111111;
+  --card-border: #222222;
+  --text: #f5f5f5;
+  --text-dim: #999999;
+  --text-pending: #555555;
+  --accent-yellow: #F0C60A;
+  --accent-green: #3ECF8E;
+  --accent-orange: #ff9966;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-bg: var(--bg);
+  --color-card-bg: var(--card-bg);
+  --color-card-border: var(--card-border);
+  --color-text: var(--text);
+  --color-text-dim: var(--text-dim);
+  --color-text-pending: var(--text-pending);
+  --color-accent-yellow: var(--accent-yellow);
+  --color-accent-green: var(--accent-green);
+  --color-accent-orange: var(--accent-orange);
+  --font-display: var(--font-cormorant);
+  --font-body: var(--font-dm-sans);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-dm-sans), system-ui, sans-serif;
 }
