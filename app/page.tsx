@@ -6,6 +6,7 @@
 // se muestran en gris con etiqueta "pendiente".
 // =============================================================================
 
+import Link from 'next/link';
 import { getMarketingWindow, type MarketingWindow } from '@/lib/queries';
 import {
   ayerEnTijuana,
