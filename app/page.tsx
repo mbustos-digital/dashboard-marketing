@@ -56,31 +56,6 @@ function fmtFechaCorta(yyyy_mm_dd: string): string {
   }).format(fecha);
 }
 
-function fmtFechaLarga(yyyy_mm_dd: string): string {
-  const [y, m, d] = yyyy_mm_dd.split('-').map(Number);
-  const fecha = new Date(Date.UTC(y, m - 1, d));
-  return new Intl.DateTimeFormat('es-MX', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-    timeZone: 'UTC',
-  }).format(fecha);
-}
-
-/**
- * Construye el label histórico de un video. Si fue publicado antes del VSL
- * actual, agrega un warning "(incluye funnel anterior)" para que el usuario
- * sepa que esas vistas mezclan tráfico del VSL viejo y el actual.
- */
-function labelHistorico(publishedAt: string | null, vslPublishedAt: string | null): string {
-  if (!publishedAt) return '↳ Histórico desde publicación';
-  const fechaStr = fmtFechaLarga(publishedAt);
-  const incluyeAnterior =
-    vslPublishedAt !== null && publishedAt < vslPublishedAt;
-  return incluyeAnterior
-    ? `↳ Histórico desde ${fechaStr} (incluye funnel anterior)`
-    : `↳ Histórico desde ${fechaStr}`;
-}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Page (server component)
@@ -146,14 +121,12 @@ export default async function Page() {
 
       {/* FOOTER */}
       <footer className="mt-12 pt-6 border-t" style={{ borderColor: 'var(--card-border)' }}>
-        {mes?.vsl_published_at && (
-          <p className="text-base mb-2" style={{ color: 'var(--text-dim)' }}>
-            <strong style={{ color: 'var(--accent-yellow)' }}>Funnel actual</strong>:
-            VSL publicado el {fmtFechaLarga(mes.vsl_published_at)}. Datos del funnel actual
-            empiezan desde esa fecha; tráfico anterior (visible solo en los Thanks por su
-            fecha de publicación previa) corresponde al funnel anterior.
-          </p>
-        )}
+        <p className="text-base mb-2" style={{ color: 'var(--text-dim)' }}>
+          <strong style={{ color: 'var(--accent-yellow)' }}>Funnel actual desde 1-may-2026.</strong>{' '}
+          Data anterior a esa fecha fue limpiada para alinear el análisis. Los valores en
+          0 de las etapas YouTube son honestos: la primera medición diaria real se publica
+          mañana 6:15 AM TJ y a partir de ahí se acumulan.
+        </p>
         <p className="text-base" style={{ color: 'var(--text-pending)' }}>
           Crons automáticos diarios: Meta 6:00 AM TJ, YouTube 6:15 AM TJ. Calendly webhook
           alimenta leads sin intervención. Manual: marcar asistió/calificado/cerro en{' '}
@@ -218,12 +191,6 @@ function VentanaCard({
             ) : (
               <StageRow num="3" label="Vistas Video VSL" value="—" pending="Fase 3" />
             )}
-            {data.vsl_cumulative_total !== null && (
-              <AuxRow
-                label={labelHistorico(data.vsl_published_at, data.vsl_published_at)}
-                value={fmtNumber(data.vsl_cumulative_total)}
-              />
-            )}
             <StageRow
               num="4"
               label="Agendamientos"
@@ -241,12 +208,6 @@ function VentanaCard({
             ) : (
               <StageRow num="5" label="Vistas Video Thanks (9 min)" value="—" pending="Fase 3" />
             )}
-            {data.thanks_cumulative_total !== null && (
-              <AuxRow
-                label={labelHistorico(data.thanks_published_at, data.vsl_published_at)}
-                value={fmtNumber(data.thanks_cumulative_total)}
-              />
-            )}
             {data.thanks_prep_views !== null && (
               <AuxRow
                 label="↳ Prep video (40 seg, alcance)"
@@ -256,12 +217,6 @@ function VentanaCard({
                     ? `${data.thanks_prep_days_baseline_only}d baseline`
                     : undefined
                 }
-              />
-            )}
-            {data.thanks_prep_cumulative_total !== null && (
-              <AuxRow
-                label={`↳ Prep video — ${labelHistorico(data.thanks_prep_published_at, data.vsl_published_at).replace('↳ ', '')}`}
-                value={fmtNumber(data.thanks_prep_cumulative_total)}
               />
             )}
           </Section>
