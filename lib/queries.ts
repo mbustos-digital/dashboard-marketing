@@ -52,6 +52,11 @@ export type MarketingWindow = {
   vsl_cumulative_total: number | null;
   thanks_cumulative_total: number | null;
   thanks_prep_cumulative_total: number | null;
+
+  // Fechas de publicación (YYYY-MM-DD) — para que el "histórico" se contextualice
+  vsl_published_at: string | null;
+  thanks_published_at: string | null;
+  thanks_prep_published_at: string | null;
 };
 
 type MetaRow = {
@@ -100,16 +105,24 @@ export async function getMarketingWindow(
   }
   const ytLatestRows = (ytLatestRes.data ?? []) as Array<{
     youtube_video_type: 'vsl' | 'thanks' | 'thanks_prep' | null;
-    raw_payload: { cumulative_views?: number } | null;
+    raw_payload: { cumulative_views?: number; published_at?: string } | null;
   }>;
-  function getCumulative(type: 'vsl' | 'thanks' | 'thanks_prep'): number | null {
-    const first = ytLatestRows.find((r) => r.youtube_video_type === type);
-    if (!first) return null;
-    return first.raw_payload?.cumulative_views ?? null;
+  function getLatest(type: 'vsl' | 'thanks' | 'thanks_prep') {
+    return ytLatestRows.find((r) => r.youtube_video_type === type);
   }
-  const vsl_cumulative_total = getCumulative('vsl');
-  const thanks_cumulative_total = getCumulative('thanks');
-  const thanks_prep_cumulative_total = getCumulative('thanks_prep');
+  function isoToFecha(iso: string | undefined): string | null {
+    if (!iso) return null;
+    return iso.slice(0, 10); // YYYY-MM-DD
+  }
+  const vslLatest = getLatest('vsl');
+  const thanksLatest = getLatest('thanks');
+  const thanksPrepLatest = getLatest('thanks_prep');
+  const vsl_cumulative_total = vslLatest?.raw_payload?.cumulative_views ?? null;
+  const thanks_cumulative_total = thanksLatest?.raw_payload?.cumulative_views ?? null;
+  const thanks_prep_cumulative_total = thanksPrepLatest?.raw_payload?.cumulative_views ?? null;
+  const vsl_published_at = isoToFecha(vslLatest?.raw_payload?.published_at);
+  const thanks_published_at = isoToFecha(thanksLatest?.raw_payload?.published_at);
+  const thanks_prep_published_at = isoToFecha(thanksPrepLatest?.raw_payload?.published_at);
 
   // Query paralelas: meta + youtube + leads (agendamientos)
   const [metaRes, ytRes, leadsRes] = await Promise.all([
@@ -227,6 +240,10 @@ export async function getMarketingWindow(
     vsl_cumulative_total,
     thanks_cumulative_total,
     thanks_prep_cumulative_total,
+
+    vsl_published_at,
+    thanks_published_at,
+    thanks_prep_published_at,
   };
 }
 

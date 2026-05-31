@@ -56,6 +56,32 @@ function fmtFechaCorta(yyyy_mm_dd: string): string {
   }).format(fecha);
 }
 
+function fmtFechaLarga(yyyy_mm_dd: string): string {
+  const [y, m, d] = yyyy_mm_dd.split('-').map(Number);
+  const fecha = new Date(Date.UTC(y, m - 1, d));
+  return new Intl.DateTimeFormat('es-MX', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(fecha);
+}
+
+/**
+ * Construye el label histórico de un video. Si fue publicado antes del VSL
+ * actual, agrega un warning "(incluye funnel anterior)" para que el usuario
+ * sepa que esas vistas mezclan tráfico del VSL viejo y el actual.
+ */
+function labelHistorico(publishedAt: string | null, vslPublishedAt: string | null): string {
+  if (!publishedAt) return '↳ Histórico desde publicación';
+  const fechaStr = fmtFechaLarga(publishedAt);
+  const incluyeAnterior =
+    vslPublishedAt !== null && publishedAt < vslPublishedAt;
+  return incluyeAnterior
+    ? `↳ Histórico desde ${fechaStr} (incluye funnel anterior)`
+    : `↳ Histórico desde ${fechaStr}`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Page (server component)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -120,9 +146,17 @@ export default async function Page() {
 
       {/* FOOTER */}
       <footer className="mt-12 pt-6 border-t" style={{ borderColor: 'var(--card-border)' }}>
+        {mes?.vsl_published_at && (
+          <p className="text-base mb-2" style={{ color: 'var(--text-dim)' }}>
+            <strong style={{ color: 'var(--accent-yellow)' }}>Funnel actual</strong>:
+            VSL publicado el {fmtFechaLarga(mes.vsl_published_at)}. Datos del funnel actual
+            empiezan desde esa fecha; tráfico anterior (visible solo en los Thanks por su
+            fecha de publicación previa) corresponde al funnel anterior.
+          </p>
+        )}
         <p className="text-base" style={{ color: 'var(--text-pending)' }}>
-          Sistema completo en producción. Crons automáticos diarios: Meta 6:00 AM TJ, YouTube 6:15 AM TJ.
-          Calendly webhook alimenta leads sin intervención. Manual: marcar asistió/calificado/cerro en{' '}
+          Crons automáticos diarios: Meta 6:00 AM TJ, YouTube 6:15 AM TJ. Calendly webhook
+          alimenta leads sin intervención. Manual: marcar asistió/calificado/cerro en{' '}
           <a href="/leads" style={{ color: 'var(--accent-yellow)', textDecoration: 'underline' }}>/leads/[id]</a>{' '}
           post-J1.
         </p>
@@ -186,7 +220,7 @@ function VentanaCard({
             )}
             {data.vsl_cumulative_total !== null && (
               <AuxRow
-                label="↳ Histórico desde publicación"
+                label={labelHistorico(data.vsl_published_at, data.vsl_published_at)}
                 value={fmtNumber(data.vsl_cumulative_total)}
               />
             )}
@@ -209,7 +243,7 @@ function VentanaCard({
             )}
             {data.thanks_cumulative_total !== null && (
               <AuxRow
-                label="↳ Histórico desde publicación"
+                label={labelHistorico(data.thanks_published_at, data.vsl_published_at)}
                 value={fmtNumber(data.thanks_cumulative_total)}
               />
             )}
@@ -226,7 +260,7 @@ function VentanaCard({
             )}
             {data.thanks_prep_cumulative_total !== null && (
               <AuxRow
-                label="↳ Prep video — histórico desde publicación"
+                label={`↳ Prep video — ${labelHistorico(data.thanks_prep_published_at, data.vsl_published_at).replace('↳ ', '')}`}
                 value={fmtNumber(data.thanks_prep_cumulative_total)}
               />
             )}
