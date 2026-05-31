@@ -6,6 +6,7 @@
 // se muestran en gris con etiqueta "pendiente".
 // =============================================================================
 
+import Link from 'next/link';
 import { getMarketingWindow, type MarketingWindow } from '@/lib/queries';
 import {
   ayerEnTijuana,
@@ -81,16 +82,29 @@ export default async function Page() {
   return (
     <main className="min-h-screen w-full px-6 py-8 md:px-12 md:py-12 bg-[var(--bg)] text-[var(--text)]">
       {/* HEADER */}
-      <header className="mb-10">
-        <h1
-          className="text-[46px] md:text-[62px] tracking-tight leading-tight"
-          style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500 }}
+      <header className="mb-10 flex items-end justify-between gap-4 flex-wrap">
+        <div>
+          <h1
+            className="text-[46px] md:text-[62px] tracking-tight leading-tight"
+            style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500 }}
+          >
+            Dashboard Marketing
+          </h1>
+          <p className="mt-1 text-lg" style={{ color: 'var(--text-dim)' }}>
+            Mauricio Bustos · Datos actualizados a {fmtFechaCorta(ayer)}
+          </p>
+        </div>
+        <Link
+          href="/leads"
+          className="px-5 py-3 rounded-lg font-medium text-lg border"
+          style={{
+            background: 'transparent',
+            borderColor: 'var(--accent-yellow)',
+            color: 'var(--accent-yellow)',
+          }}
         >
-          Dashboard Marketing
-        </h1>
-        <p className="mt-1 text-lg" style={{ color: 'var(--text-dim)' }}>
-          Mauricio Bustos · Datos actualizados a {fmtFechaCorta(ayer)}
-        </p>
+          Leads →
+        </Link>
       </header>
 
       {/* TABS */}
