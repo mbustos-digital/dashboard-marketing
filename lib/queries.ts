@@ -397,19 +397,22 @@ export type CACAcumulado = {
   cac_mxn: number | null;
 };
 
-export async function getCACAcumulado(): Promise<CACAcumulado> {
+export async function getCACAcumulado(hastaFecha?: string): Promise<CACAcumulado> {
   const supabase = getSupabaseServer();
 
-  const [spendRes, cierresRes] = await Promise.all([
-    supabase
-      .from('marketing_metrics_daily')
-      .select('spend')
-      .eq('plataforma', 'meta'),
-    supabase
-      .from('leads')
-      .select('id', { count: 'exact', head: true })
-      .eq('cerro', true),
-  ]);
+  let spendQuery = supabase
+    .from('marketing_metrics_daily')
+    .select('spend')
+    .eq('plataforma', 'meta');
+  if (hastaFecha) spendQuery = spendQuery.lte('fecha', hastaFecha);
+
+  let cierresQuery = supabase
+    .from('leads')
+    .select('id', { count: 'exact', head: true })
+    .eq('cerro', true);
+  if (hastaFecha) cierresQuery = cierresQuery.lte('fecha_cierre', hastaFecha);
+
+  const [spendRes, cierresRes] = await Promise.all([spendQuery, cierresQuery]);
 
   if (spendRes.error) throw new Error(`Query spend acumulado falló: ${spendRes.error.message}`);
   if (cierresRes.error) throw new Error(`Query cierres acumulado falló: ${cierresRes.error.message}`);

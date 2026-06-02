@@ -10,11 +10,13 @@ import Link from 'next/link';
 import { getMarketingWindow, getCACAcumulado, type MarketingWindow, type CACAcumulado } from '@/lib/queries';
 import {
   ayerEnTijuana,
-  lunesActualEnTijuana,
-  primerDiaDelMesEnTijuana,
+  esFechaValida,
+  lunesDeFecha,
+  primerDiaDelMesDeFecha,
 } from '@/lib/date-utils';
 import { DashboardHeader } from './_components/DashboardHeader';
 import { DashboardTabs } from './_components/DashboardTabs';
+import { FechaSelector } from './_components/FechaSelector';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -62,10 +64,23 @@ function fmtFechaCorta(yyyy_mm_dd: string): string {
 // Page (server component)
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default async function Page() {
-  const ayer = ayerEnTijuana();
-  const lunes = lunesActualEnTijuana();
-  const mesInicio = primerDiaDelMesEnTijuana();
+export default async function Page({
+  searchParams,
+}: {
+  searchParams: Promise<{ fecha?: string }>;
+}) {
+  const ayerReal = ayerEnTijuana();
+  const params = await searchParams;
+
+  // Si user pasó ?fecha=YYYY-MM-DD válido, lo usa como anchor. Si no, ayer real.
+  // El anchor actúa como "ayer" — el último día visible en las 3 ventanas.
+  const fechaParam = params.fecha;
+  const ayer =
+    fechaParam && esFechaValida(fechaParam) && fechaParam <= ayerReal
+      ? fechaParam
+      : ayerReal;
+  const lunes = lunesDeFecha(ayer);
+  const mesInicio = primerDiaDelMesDeFecha(ayer);
 
   let dia: MarketingWindow | null = null;
   let semana: MarketingWindow | null = null;
@@ -78,7 +93,7 @@ export default async function Page() {
       getMarketingWindow(ayer, ayer),
       getMarketingWindow(lunes, ayer),
       getMarketingWindow(mesInicio, ayer),
-      getCACAcumulado(),
+      getCACAcumulado(ayer),
     ]);
   } catch (err) {
     errorMsg = err instanceof Error ? err.message : String(err);
@@ -88,6 +103,8 @@ export default async function Page() {
     <main className="min-h-screen w-full px-6 py-8 md:px-12 md:py-12 bg-[var(--bg)] text-[var(--text)]">
       <DashboardHeader fechaAyer={ayer} />
       <DashboardTabs active="marketing" />
+
+      <FechaSelector fechaActualReal={ayerReal} />
 
       {/* CONTENT */}
       {errorMsg ? (
