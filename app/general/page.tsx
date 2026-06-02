@@ -13,10 +13,12 @@ import {
 } from '@/lib/queries';
 import {
   ayerEnTijuana,
-  primerDiaDelMesEnTijuana,
+  esFechaValida,
+  primerDiaDelMesDeFecha,
 } from '@/lib/date-utils';
 import { DashboardHeader } from '../_components/DashboardHeader';
 import { DashboardTabs } from '../_components/DashboardTabs';
+import { FechaSelector } from '../_components/FechaSelector';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -134,9 +136,44 @@ function diagnosticarCuello(
 // Page
 // ─────────────────────────────────────────────────────────────────────────────
 
-export default async function GeneralPage() {
-  const fechaAyer = ayerEnTijuana();
-  const mesInicio = primerDiaDelMesEnTijuana();
+function fmtMesNombre(yyyy_mm_dd: string): string {
+  const [y, m] = yyyy_mm_dd.split('-').map(Number);
+  const fecha = new Date(Date.UTC(y, m - 1, 1));
+  return new Intl.DateTimeFormat('es-MX', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(fecha);
+}
+
+export default async function GeneralPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ desde?: string; hasta?: string }>;
+}) {
+  const ayerReal = ayerEnTijuana();
+  const params = await searchParams;
+  const desdeParam = params.desde;
+  const hastaParam = params.hasta;
+  const filtroActivo =
+    !!desdeParam &&
+    !!hastaParam &&
+    esFechaValida(desdeParam) &&
+    esFechaValida(hastaParam) &&
+    desdeParam <= hastaParam &&
+    hastaParam <= ayerReal;
+
+  // Rango efectivo para marketing:
+  //   - Filtro activo: rango elegido por el usuario
+  //   - Sin filtro: mes en curso
+  const rangoDesde = filtroActivo ? desdeParam! : primerDiaDelMesDeFecha(ayerReal);
+  const rangoHasta = filtroActivo ? hastaParam! : ayerReal;
+  const tituloSeccion = filtroActivo
+    ? `Marketing — ${rangoDesde} → ${rangoHasta}`
+    : `Marketing — ${fmtMesNombre(ayerReal)}`;
+  const subtituloSeccion = filtroActivo
+    ? `Datos del rango filtrado`
+    : `Datos automáticos de Meta + YouTube, mes en curso`;
 
   let mes: MarketingWindow | null = null;
   let maduras: ResumenComercialMaduras | null = null;
@@ -144,7 +181,7 @@ export default async function GeneralPage() {
 
   try {
     [mes, maduras] = await Promise.all([
-      getMarketingWindow(mesInicio, fechaAyer),
+      getMarketingWindow(rangoDesde, rangoHasta),
       getResumenComercialMaduras(),
     ]);
   } catch (err) {
@@ -153,8 +190,10 @@ export default async function GeneralPage() {
 
   return (
     <main className="min-h-screen w-full px-6 py-8 md:px-12 md:py-12 bg-[var(--bg)] text-[var(--text)]">
-      <DashboardHeader fechaAyer={fechaAyer} />
+      <DashboardHeader fechaAyer={ayerReal} />
       <DashboardTabs active="general" />
+
+      <FechaSelector fechaActualReal={ayerReal} />
 
       {errorMsg || !mes || !maduras ? (
         <div
@@ -175,8 +214,8 @@ export default async function GeneralPage() {
 
           {/* KPIs Marketing del mes */}
           <Section
-            title="Marketing — mes actual"
-            subtitle="Datos automáticos de Meta + YouTube"
+            title={tituloSeccion}
+            subtitle={subtituloSeccion}
           >
             <Grid>
               <KPI
@@ -209,7 +248,7 @@ export default async function GeneralPage() {
             subtitle={
               maduras.cohortes_maduras_count === 0
                 ? 'Aún sin cohortes maduras. Datos llegan ≥14 días después de J1.'
-                : `Acumulado de ${maduras.cohortes_maduras_count} cohorte${maduras.cohortes_maduras_count === 1 ? '' : 's'} mensual${maduras.cohortes_maduras_count === 1 ? '' : 'es'} con J1 hace ≥14d`
+                : `Acumulado de ${maduras.cohortes_maduras_count} cohorte${maduras.cohortes_maduras_count === 1 ? '' : 's'} mensual${maduras.cohortes_maduras_count === 1 ? '' : 'es'} con J1 hace ≥14d (siempre vs hoy real, no afecta filtro de fecha)`
             }
           >
             <Grid>

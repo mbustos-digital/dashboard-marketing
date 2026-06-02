@@ -67,34 +67,48 @@ function fmtFechaCorta(yyyy_mm_dd: string): string {
 export default async function Page({
   searchParams,
 }: {
-  searchParams: Promise<{ fecha?: string }>;
+  searchParams: Promise<{ desde?: string; hasta?: string }>;
 }) {
   const ayerReal = ayerEnTijuana();
   const params = await searchParams;
 
-  // Si user pasó ?fecha=YYYY-MM-DD válido, lo usa como anchor. Si no, ayer real.
-  // El anchor actúa como "ayer" — el último día visible en las 3 ventanas.
-  const fechaParam = params.fecha;
-  const ayer =
-    fechaParam && esFechaValida(fechaParam) && fechaParam <= ayerReal
-      ? fechaParam
-      : ayerReal;
+  // Si user pasó ?desde=...&hasta=... válidos → vista custom (1 ventana).
+  // Si no → vista por defecto (3 ventanas: Día / Semana / Mes anclados a ayer real).
+  const desdeParam = params.desde;
+  const hastaParam = params.hasta;
+  const filtroActivo =
+    !!desdeParam &&
+    !!hastaParam &&
+    esFechaValida(desdeParam) &&
+    esFechaValida(hastaParam) &&
+    desdeParam <= hastaParam &&
+    hastaParam <= ayerReal;
+
+  const ayer = ayerReal;
   const lunes = lunesDeFecha(ayer);
   const mesInicio = primerDiaDelMesDeFecha(ayer);
 
   let dia: MarketingWindow | null = null;
   let semana: MarketingWindow | null = null;
   let mes: MarketingWindow | null = null;
+  let custom: MarketingWindow | null = null;
   let cacGlobal: CACAcumulado | null = null;
   let errorMsg: string | null = null;
 
   try {
-    [dia, semana, mes, cacGlobal] = await Promise.all([
-      getMarketingWindow(ayer, ayer),
-      getMarketingWindow(lunes, ayer),
-      getMarketingWindow(mesInicio, ayer),
-      getCACAcumulado(ayer),
-    ]);
+    if (filtroActivo) {
+      [custom, cacGlobal] = await Promise.all([
+        getMarketingWindow(desdeParam!, hastaParam!),
+        getCACAcumulado(hastaParam!),
+      ]);
+    } else {
+      [dia, semana, mes, cacGlobal] = await Promise.all([
+        getMarketingWindow(ayer, ayer),
+        getMarketingWindow(lunes, ayer),
+        getMarketingWindow(mesInicio, ayer),
+        getCACAcumulado(),
+      ]);
+    }
   } catch (err) {
     errorMsg = err instanceof Error ? err.message : String(err);
   }
@@ -147,25 +161,36 @@ export default async function Page({
             </section>
           )}
 
-          <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <VentanaCard
-              title="Día anterior"
-              subtitle={fmtFechaCorta(ayer)}
-              data={dia}
-            />
-            <VentanaCard
-              title="Semana en curso"
-              subtitle={`${fmtFechaCorta(lunes)} → ${fmtFechaCorta(ayer)}`}
-              data={semana}
-              showCAC
-            />
-            <VentanaCard
-              title="Mes acumulado"
-              subtitle={`${fmtFechaCorta(mesInicio)} → ${fmtFechaCorta(ayer)}`}
-              data={mes}
-              showCAC
-            />
-          </section>
+          {filtroActivo ? (
+            <section className="grid grid-cols-1 gap-6">
+              <VentanaCard
+                title="Rango seleccionado"
+                subtitle={`${fmtFechaCorta(desdeParam!)} → ${fmtFechaCorta(hastaParam!)}`}
+                data={custom}
+                showCAC
+              />
+            </section>
+          ) : (
+            <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <VentanaCard
+                title="Día anterior"
+                subtitle={fmtFechaCorta(ayer)}
+                data={dia}
+              />
+              <VentanaCard
+                title="Semana en curso"
+                subtitle={`${fmtFechaCorta(lunes)} → ${fmtFechaCorta(ayer)}`}
+                data={semana}
+                showCAC
+              />
+              <VentanaCard
+                title="Mes acumulado"
+                subtitle={`${fmtFechaCorta(mesInicio)} → ${fmtFechaCorta(ayer)}`}
+                data={mes}
+                showCAC
+              />
+            </section>
+          )}
         </>
       )}
 
