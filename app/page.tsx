@@ -7,7 +7,14 @@
 // =============================================================================
 
 import Link from 'next/link';
-import { getMarketingWindow, getCACAcumulado, type MarketingWindow, type CACAcumulado } from '@/lib/queries';
+import {
+  getMarketingWindow,
+  getCACAcumulado,
+  listCACMensual,
+  type MarketingWindow,
+  type CACAcumulado,
+  type CACMensualEntry,
+} from '@/lib/queries';
 import {
   ayerEnTijuana,
   esFechaValida,
@@ -93,20 +100,23 @@ export default async function Page({
   let mes: MarketingWindow | null = null;
   let custom: MarketingWindow | null = null;
   let cacGlobal: CACAcumulado | null = null;
+  let cacMensual: CACMensualEntry[] = [];
   let errorMsg: string | null = null;
 
   try {
     if (filtroActivo) {
-      [custom, cacGlobal] = await Promise.all([
+      [custom, cacGlobal, cacMensual] = await Promise.all([
         getMarketingWindow(desdeParam!, hastaParam!),
         getCACAcumulado(hastaParam!),
+        listCACMensual(12),
       ]);
     } else {
-      [dia, semana, mes, cacGlobal] = await Promise.all([
+      [dia, semana, mes, cacGlobal, cacMensual] = await Promise.all([
         getMarketingWindow(ayer, ayer),
         getMarketingWindow(lunes, ayer),
         getMarketingWindow(mesInicio, ayer),
         getCACAcumulado(),
+        listCACMensual(12),
       ]);
     }
   } catch (err) {
@@ -135,31 +145,8 @@ export default async function Page({
         </div>
       ) : (
         <>
-          {/* CAC GLOBAL — banner compacto de referencia */}
-          {cacGlobal && (
-            <section
-              className="mb-6 rounded-xl border px-5 py-4 flex flex-wrap items-center justify-between gap-3"
-              style={{ background: 'var(--card-bg)', borderColor: 'var(--accent-yellow)' }}
-            >
-              <div>
-                <span
-                  className="text-sm uppercase tracking-widest"
-                  style={{ color: 'var(--text-dim)' }}
-                >
-                  CAC acumulado (todo el histórico)
-                </span>
-                <span className="text-base ml-3" style={{ color: 'var(--text-dim)' }}>
-                  {fmtCurrency(cacGlobal.spend_total_mxn)} ÷ {cacGlobal.cierres_total} cliente{cacGlobal.cierres_total === 1 ? '' : 's'}
-                </span>
-              </div>
-              <div
-                className="text-[28px] leading-none tracking-tight"
-                style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500, color: 'var(--accent-yellow)' }}
-              >
-                {cacGlobal.cac_mxn !== null ? `${fmtCurrency(cacGlobal.cac_mxn)} / cliente` : '— / cliente'}
-              </div>
-            </section>
-          )}
+          {/* CAC MENSUAL — tendencia + acumulado como referencia secundaria */}
+          <CACMensualChart entries={cacMensual} cacGlobal={cacGlobal} />
 
           {filtroActivo ? (
             <section className="grid grid-cols-1 gap-6">
@@ -545,5 +532,141 @@ function AuxRow({
         </span>
       </div>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CACMensualChart — tendencia mensual + acumulado como referencia (Prompt 11)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function fmtMesCorto(yyyy_mm: string): string {
+  const [y, m] = yyyy_mm.split('-').map(Number);
+  const fecha = new Date(Date.UTC(y, m - 1, 1));
+  return new Intl.DateTimeFormat('es-MX', {
+    month: 'short',
+    year: '2-digit',
+    timeZone: 'UTC',
+  }).format(fecha);
+}
+
+function CACMensualChart({
+  entries,
+  cacGlobal,
+}: {
+  entries: CACMensualEntry[];
+  cacGlobal: CACAcumulado | null;
+}) {
+  // Caso vacío: aún no hay primeros pagos capturados
+  if (entries.length === 0) {
+    return (
+      <section
+        className="mb-6 rounded-xl border px-5 py-5"
+        style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
+      >
+        <div className="text-sm uppercase tracking-widest mb-2" style={{ color: 'var(--text-dim)' }}>
+          CAC mensual (Spend ÷ primeros pagos del mes)
+        </div>
+        <p className="text-base" style={{ color: 'var(--text-pending)' }}>
+          Aún sin meses con primeros pagos capturados. Marcá{' '}
+          <code>fecha_primer_pago</code> en al menos 1 lead para activar la
+          tendencia.
+        </p>
+        {cacGlobal && cacGlobal.cac_mxn !== null && (
+          <p className="text-sm mt-3" style={{ color: 'var(--text-dim)' }}>
+            CAC acumulado histórico (referencia, basado en cierre):{' '}
+            <strong>{
+              new Intl.NumberFormat('es-MX', {
+                style: 'currency',
+                currency: 'MXN',
+                maximumFractionDigits: 0,
+              }).format(cacGlobal.cac_mxn)
+            }</strong>{' '}
+            ÷ {cacGlobal.cierres_total} cierre{cacGlobal.cierres_total === 1 ? '' : 's'}
+          </p>
+        )}
+      </section>
+    );
+  }
+
+  // Max para escalar barras
+  const maxCAC = Math.max(...entries.map((e) => e.cac_mxn));
+  const fmtMXN0 = new Intl.NumberFormat('es-MX', {
+    style: 'currency',
+    currency: 'MXN',
+    maximumFractionDigits: 0,
+  });
+
+  // CAC promedio del periodo mostrado (los meses con pagos)
+  const totalSpend = entries.reduce((s, e) => s + e.spend_mxn, 0);
+  const totalPagos = entries.reduce((s, e) => s + e.primeros_pagos, 0);
+  const cacPromedioPeriodo = totalPagos > 0 ? totalSpend / totalPagos : null;
+
+  return (
+    <section
+      className="mb-6 rounded-xl border p-5 md:p-6"
+      style={{ background: 'var(--card-bg)', borderColor: 'var(--accent-yellow)' }}
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-3 mb-4">
+        <div>
+          <div className="text-sm uppercase tracking-widest" style={{ color: 'var(--text-dim)' }}>
+            CAC mensual — tendencia
+          </div>
+          <p className="text-base" style={{ color: 'var(--text-dim)' }}>
+            Spend Meta del mes ÷ leads con primer pago en ese mes. Solo meses con ≥1 pago.
+          </p>
+        </div>
+        {cacPromedioPeriodo !== null && (
+          <div
+            className="text-[22px] tracking-tight tabular-nums"
+            style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500, color: 'var(--accent-yellow)' }}
+          >
+            Promedio: {fmtMXN0.format(cacPromedioPeriodo)} / cliente
+          </div>
+        )}
+      </div>
+
+      {/* Barras horizontales: una fila por mes */}
+      <div className="space-y-2">
+        {entries.map((e) => {
+          const widthPct = maxCAC > 0 ? (e.cac_mxn / maxCAC) * 100 : 0;
+          return (
+            <div key={e.mes} className="flex items-center gap-3 text-base">
+              <div className="w-20 shrink-0" style={{ color: 'var(--text-dim)' }}>
+                {fmtMesCorto(e.mes)}
+              </div>
+              <div className="flex-1 h-6 rounded relative" style={{ background: '#0f0f0f' }}>
+                <div
+                  className="h-full rounded"
+                  style={{
+                    width: `${Math.max(widthPct, 2)}%`,
+                    background: 'var(--accent-yellow)',
+                    opacity: 0.85,
+                  }}
+                  title={`${fmtMesCorto(e.mes)}: ${fmtMXN0.format(e.cac_mxn)} (${e.primeros_pagos} cliente${e.primeros_pagos === 1 ? '' : 's'})`}
+                />
+              </div>
+              <div className="w-32 shrink-0 text-right tabular-nums" style={{ color: 'var(--text)' }}>
+                {fmtMXN0.format(e.cac_mxn)}
+              </div>
+              <div className="w-20 shrink-0 text-right text-sm tabular-nums" style={{ color: 'var(--text-pending)' }}>
+                {e.primeros_pagos} {e.primeros_pagos === 1 ? 'cliente' : 'clientes'}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Acumulado histórico — referencia secundaria */}
+      {cacGlobal && cacGlobal.cac_mxn !== null && (
+        <p className="text-sm mt-4" style={{ color: 'var(--text-dim)' }}>
+          CAC acumulado histórico (referencia, basado en <em>cierres</em> firmados —
+          no en primeros pagos):{' '}
+          <strong style={{ color: 'var(--text)' }}>
+            {fmtMXN0.format(cacGlobal.cac_mxn)}
+          </strong>{' '}
+          · {cacGlobal.cierres_total} cierre{cacGlobal.cierres_total === 1 ? '' : 's'}
+        </p>
+      )}
+    </section>
   );
 }

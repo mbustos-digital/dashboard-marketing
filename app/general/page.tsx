@@ -8,8 +8,10 @@
 import {
   getMarketingWindow,
   getResumenComercialMaduras,
+  getDistribucionPipeline,
   type MarketingWindow,
   type ResumenComercialMaduras,
+  type DistribucionPipeline,
 } from '@/lib/queries';
 import {
   ayerEnTijuana,
@@ -177,12 +179,14 @@ export default async function GeneralPage({
 
   let mes: MarketingWindow | null = null;
   let maduras: ResumenComercialMaduras | null = null;
+  let pipeline: DistribucionPipeline | null = null;
   let errorMsg: string | null = null;
 
   try {
-    [mes, maduras] = await Promise.all([
+    [mes, maduras, pipeline] = await Promise.all([
       getMarketingWindow(rangoDesde, rangoHasta),
       getResumenComercialMaduras(),
+      getDistribucionPipeline(),
     ]);
   } catch (err) {
     errorMsg = err instanceof Error ? err.message : String(err);
@@ -211,6 +215,9 @@ export default async function GeneralPage({
         <div className="space-y-8">
           {/* DIAGNÓSTICO CRUZADO */}
           <DiagnosticoCard data={diagnosticarCuello(mes, maduras)} />
+
+          {/* ESTADO DEL PIPELINE */}
+          {pipeline && <PipelineCard data={pipeline} />}
 
           {/* KPIs Marketing del mes */}
           <Section
@@ -315,6 +322,108 @@ function DiagnosticoCard({ data }: { data: DiagnosticoCuello }) {
           <p className="text-lg leading-relaxed">{data.mensaje}</p>
         </div>
       </div>
+    </section>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PipelineCard — distribución de leads activos por madurez (Prompt 10)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function PipelineCard({ data }: { data: DistribucionPipeline }) {
+  // Texto interpretativo automático
+  let interpretacion: { texto: string; color: string };
+  if (data.total === 0) {
+    interpretacion = {
+      texto: 'No hay leads activos (asistieron a J1 y aún no cerraron). Cuando empieces a marcar leads, aparecerán aquí.',
+      color: 'var(--text-dim)',
+    };
+  } else if (data.pct_madura > 60) {
+    interpretacion = {
+      texto: 'Pipeline maduro. La tasa de cierre actual es confiable como predictor.',
+      color: 'var(--accent-green)',
+    };
+  } else if (data.pct_reciente > 60) {
+    interpretacion = {
+      texto: 'Pipeline nuevo. Esperá ~2 semanas para evaluar la tasa de cierre — la mayoría aún están en ventana de maduración.',
+      color: 'var(--text-pending)',
+    };
+  } else {
+    interpretacion = {
+      texto: 'Pipeline mixto. La tasa de cierre tiene confiabilidad parcial — algunos leads aún están madurando.',
+      color: 'var(--accent-yellow)',
+    };
+  }
+
+  return (
+    <section
+      className="rounded-xl border p-6 md:p-8"
+      style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
+    >
+      <h2
+        className="text-[28px]"
+        style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500 }}
+      >
+        Estado del pipeline
+      </h2>
+      <p className="text-base mt-1 mb-5" style={{ color: 'var(--text-dim)' }}>
+        {data.total} lead{data.total === 1 ? '' : 's'} activo{data.total === 1 ? '' : 's'} (asistió a J1, no ha cerrado).
+      </p>
+
+      {data.total > 0 && (
+        <>
+          {/* Barra segmentada horizontal */}
+          <div
+            className="flex w-full h-8 rounded-md overflow-hidden border"
+            style={{ borderColor: 'var(--card-border)' }}
+          >
+            {data.reciente > 0 && (
+              <div
+                title={`Reciente: ${data.reciente} (${data.pct_reciente.toFixed(0)}%)`}
+                style={{
+                  width: `${data.pct_reciente}%`,
+                  background: 'var(--text-dim)',
+                }}
+              />
+            )}
+            {data.madurando > 0 && (
+              <div
+                title={`Madurando: ${data.madurando} (${data.pct_madurando.toFixed(0)}%)`}
+                style={{
+                  width: `${data.pct_madurando}%`,
+                  background: 'var(--accent-yellow)',
+                }}
+              />
+            )}
+            {data.madura > 0 && (
+              <div
+                title={`Madura: ${data.madura} (${data.pct_madura.toFixed(0)}%)`}
+                style={{
+                  width: `${data.pct_madura}%`,
+                  background: 'var(--accent-green)',
+                }}
+              />
+            )}
+          </div>
+
+          {/* Leyenda con conteos y % */}
+          <div className="flex flex-wrap gap-x-6 gap-y-2 mt-4 text-base">
+            <span style={{ color: 'var(--text-dim)' }}>
+              ⚪ Reciente: <strong>{data.reciente}</strong> ({data.pct_reciente.toFixed(0)}%)
+            </span>
+            <span style={{ color: 'var(--accent-yellow)' }}>
+              🟡 Madurando: <strong>{data.madurando}</strong> ({data.pct_madurando.toFixed(0)}%)
+            </span>
+            <span style={{ color: 'var(--accent-green)' }}>
+              🟢 Madura: <strong>{data.madura}</strong> ({data.pct_madura.toFixed(0)}%)
+            </span>
+          </div>
+        </>
+      )}
+
+      <p className="mt-5 text-lg" style={{ color: interpretacion.color }}>
+        {interpretacion.texto}
+      </p>
     </section>
   );
 }

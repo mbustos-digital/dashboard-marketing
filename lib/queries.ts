@@ -608,3 +608,139 @@ export async function getSCL(): Promise<SCL> {
   return { count, avg_dias, p90_dias };
 }
 
+// =============================================================================
+// Distribución del pipeline activo (Prompt 10)
+// =============================================================================
+// Leads "activos" = asistio_j1=true Y cerro distinto de true (no cerraron
+// todavía y siguen en el embudo). Los clasificamos por madurez vs hoy real
+// usando los mismos thresholds que estadoMadurezLead.
+// =============================================================================
+
+export type DistribucionPipeline = {
+  total: number;
+  reciente: number;          // <5d desde J1
+  madurando: number;         // 5-13d
+  madura: number;            // ≥14d
+  pct_reciente: number;      // 0-100
+  pct_madurando: number;
+  pct_madura: number;
+};
+
+export async function getDistribucionPipeline(): Promise<DistribucionPipeline> {
+  const supabase = getSupabaseServer();
+
+  // Activos = asistieron J1 y NO han cerrado (cerro != true)
+  const { data, error } = await supabase
+    .from('leads')
+    .select('fecha_junta_1, cerro, asistio_j1')
+    .eq('asistio_j1', true);
+
+  if (error) throw new Error(`Query distribución pipeline falló: ${error.message}`);
+
+  const activos = (data ?? []).filter((r) => r.cerro !== true && r.fecha_junta_1);
+
+  // Hoy en UTC (consistente con estadoMadurezLead)
+  const ahora = new Date();
+  const hoyUTC = Date.UTC(
+    ahora.getUTCFullYear(),
+    ahora.getUTCMonth(),
+    ahora.getUTCDate(),
+  );
+
+  let reciente = 0;
+  let madurando = 0;
+  let madura = 0;
+
+  for (const r of activos) {
+    if (!r.fecha_junta_1) continue;
+    const [y, m, d] = r.fecha_junta_1.split('-').map(Number);
+    const fechaJ1UTC = Date.UTC(y, m - 1, d);
+    const dias = Math.floor((hoyUTC - fechaJ1UTC) / (1000 * 60 * 60 * 24));
+    if (dias >= 14) madura++;
+    else if (dias >= 5) madurando++;
+    else reciente++;
+  }
+
+  const total = reciente + madurando + madura;
+  const pct = (n: number) => (total > 0 ? (n / total) * 100 : 0);
+
+  return {
+    total,
+    reciente,
+    madurando,
+    madura,
+    pct_reciente: pct(reciente),
+    pct_madurando: pct(madurando),
+    pct_madura: pct(madura),
+  };
+}
+
+// =============================================================================
+// CAC mensual (Prompt 11)
+// =============================================================================
+// CAC del mes = SUM(spend Meta del mes) / leads con fecha_primer_pago en el
+// mismo mes. MXN/cliente. Solo retornamos meses con ≥1 primer pago.
+//
+// Se devuelve la lista ordenada cronológicamente (más viejo → más reciente),
+// limitada a últimos N meses con datos.
+// =============================================================================
+
+export type CACMensualEntry = {
+  mes: string;              // 'YYYY-MM'
+  spend_mxn: number;
+  primeros_pagos: number;
+  cac_mxn: number;          // siempre definido (>0 por filtro de ≥1 pago)
+};
+
+export async function listCACMensual(limit = 12): Promise<CACMensualEntry[]> {
+  const supabase = getSupabaseServer();
+
+  // Pull spend Meta + leads con fecha_primer_pago en paralelo
+  const [spendRes, pagosRes] = await Promise.all([
+    supabase
+      .from('marketing_metrics_daily')
+      .select('fecha, spend')
+      .eq('plataforma', 'meta'),
+    supabase
+      .from('leads')
+      .select('fecha_primer_pago')
+      .not('fecha_primer_pago', 'is', null),
+  ]);
+
+  if (spendRes.error) throw new Error(`Spend mensual falló: ${spendRes.error.message}`);
+  if (pagosRes.error) throw new Error(`Pagos mensual falló: ${pagosRes.error.message}`);
+
+  // Agrupar spend por YYYY-MM
+  const spendPorMes = new Map<string, number>();
+  for (const r of spendRes.data ?? []) {
+    if (!r.fecha) continue;
+    const ym = r.fecha.slice(0, 7); // YYYY-MM
+    spendPorMes.set(ym, (spendPorMes.get(ym) ?? 0) + Number(r.spend ?? 0));
+  }
+
+  // Contar primeros pagos por YYYY-MM
+  const pagosPorMes = new Map<string, number>();
+  for (const r of pagosRes.data ?? []) {
+    if (!r.fecha_primer_pago) continue;
+    const ym = r.fecha_primer_pago.slice(0, 7);
+    pagosPorMes.set(ym, (pagosPorMes.get(ym) ?? 0) + 1);
+  }
+
+  // Solo meses con ≥1 primer pago
+  const entries: CACMensualEntry[] = [];
+  for (const [mes, primeros_pagos] of pagosPorMes) {
+    if (primeros_pagos <= 0) continue;
+    const spend_mxn = spendPorMes.get(mes) ?? 0;
+    entries.push({
+      mes,
+      spend_mxn,
+      primeros_pagos,
+      cac_mxn: spend_mxn / primeros_pagos,
+    });
+  }
+
+  // Ordenar cronológicamente y truncar
+  entries.sort((a, b) => a.mes.localeCompare(b.mes));
+  return entries.slice(-limit);
+}
+

@@ -191,9 +191,19 @@ function CohortesTable({
                 <th className="px-4 py-4 text-right">J1 total</th>
                 <th className="px-4 py-4 text-right">Asistió</th>
                 <th className="px-4 py-4 text-right">No-show</th>
-                <th className="px-4 py-4 text-right">Limpias</th>
+                <th className="px-4 py-4 text-right">
+                  <TermWithTooltip
+                    term="Limpias"
+                    explain="Reuniones donde el lead asistió a J1 y fue calificado (asistio_j1 = Sí Y calificado = Sí). Es la base honesta para juzgar tu capacidad de cierre."
+                  />
+                </th>
                 <th className="px-4 py-4 text-right">Cierres</th>
-                <th className="px-4 py-4 text-right">Tasa cierre</th>
+                <th className="px-4 py-4 text-right">
+                  <TermWithTooltip
+                    term="Tasa cierre"
+                    explain="Ratio joya: Cierres ÷ Limpias. Mide tu capacidad de cierre puro, independiente del volumen de leads. Mientras más alto, mejor calificás Y mejor cerrás."
+                  />
+                </th>
                 {showCiclo && <th className="px-4 py-4 text-right">Ciclo (d)</th>}
                 <th className="px-4 py-4 text-right">Ventas</th>
                 <th className="px-5 py-4">Estado</th>
@@ -256,6 +266,41 @@ function CohortesTable({
         </div>
       )}
     </section>
+  );
+}
+
+// Tooltip inline con ícono — patrón puro CSS (hover + focus + tap-friendly).
+// El span externo es focusable para que en mobile (sin hover) un tap muestre
+// el tooltip. Sin librerías.
+function TermWithTooltip({ term, explain }: { term: string; explain: string }) {
+  return (
+    <span className="relative inline-flex items-center gap-1 group">
+      <span>{term}</span>
+      <button
+        type="button"
+        aria-label={`Explicar ${term}`}
+        className="inline-flex items-center justify-center w-4 h-4 rounded-full border text-xs leading-none focus:outline-none focus:ring-1"
+        style={{
+          borderColor: 'var(--text-pending)',
+          color: 'var(--text-pending)',
+          background: 'transparent',
+        }}
+      >
+        ?
+      </button>
+      <span
+        role="tooltip"
+        className="absolute z-20 left-1/2 -translate-x-1/2 top-full mt-2 w-64 px-3 py-2 rounded-md text-sm normal-case tracking-normal text-left opacity-0 invisible group-hover:opacity-100 group-hover:visible group-focus-within:opacity-100 group-focus-within:visible transition-opacity shadow-lg"
+        style={{
+          background: '#0a0a0a',
+          color: 'var(--text)',
+          border: '1px solid var(--card-border)',
+          fontWeight: 400,
+        }}
+      >
+        {explain}
+      </span>
+    </span>
   );
 }
 
