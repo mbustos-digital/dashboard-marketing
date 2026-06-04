@@ -7,6 +7,7 @@
 
 import 'server-only';
 import { getSupabaseServer } from './supabase';
+import { sendMetaCAPIEvent } from './meta-capi';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -202,6 +203,20 @@ export async function updateLead(
     }
   }
 
+  // ───────────────────────────────────────────────────────────────────
+  // Detección de transiciones para Meta CAPI (Prompts 7 y 8 del mentor)
+  // ───────────────────────────────────────────────────────────────────
+  // Lead         — calificado pasa a true (no lo era antes)
+  // QualifiedLead — asistio_j1=true Y calificado=true ambos juntos, no lo eran antes
+  // Se detectan ANTES del save (usando actual vs merged ya validado) y se
+  // disparan DESPUÉS del save exitoso. CAPI nunca rompe el flujo.
+  // ───────────────────────────────────────────────────────────────────
+  const fireLeadEvent =
+    actual.calificado !== true && merged.calificado === true;
+  const fireQualifiedLeadEvent =
+    !(actual.asistio_j1 === true && actual.calificado === true) &&
+    merged.asistio_j1 === true && merged.calificado === true;
+
   // Solo enviamos los campos editables (no id, created_at, updated_at)
   const payload = {
     nombre: merged.nombre,
@@ -231,6 +246,36 @@ export async function updateLead(
     .select('*')
     .single();
   if (error) throw new Error(`Error actualizando lead ${id}: ${error.message}`);
+
+  // ───────────────────────────────────────────────────────────────────
+  // Disparar eventos CAPI POST-save (con guardia defensiva extra)
+  // ───────────────────────────────────────────────────────────────────
+  if (fireLeadEvent) {
+    try {
+      await sendMetaCAPIEvent({
+        eventName: 'Lead',
+        email: merged.email,
+        phone: merged.telefono,
+        customData: { lead_type: 'calificado' },
+      });
+    } catch (err) {
+      console.error('[updateLead] error firing Lead CAPI event:', err);
+    }
+  }
+
+  if (fireQualifiedLeadEvent) {
+    try {
+      await sendMetaCAPIEvent({
+        eventName: 'QualifiedLead',
+        email: merged.email,
+        phone: merged.telefono,
+        customData: { lead_type: 'j1_limpia', value: 1 },
+      });
+    } catch (err) {
+      console.error('[updateLead] error firing QualifiedLead CAPI event:', err);
+    }
+  }
+
   return data as Lead;
 }
 
