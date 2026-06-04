@@ -11,9 +11,11 @@
 import {
   listCohortesSemanales,
   listCohortesMensuales,
+  getSCL,
   type CohorteSemana,
   type CohorteMes,
   type EstadoMadurezCohorte,
+  type SCL,
 } from '@/lib/queries';
 import { ayerEnTijuana } from '@/lib/date-utils';
 import { DashboardHeader } from '../_components/DashboardHeader';
@@ -78,12 +80,14 @@ export default async function ComercialPage() {
 
   let semanales: CohorteSemana[] = [];
   let mensuales: CohorteMes[] = [];
+  let scl: SCL | null = null;
   let errorMsg: string | null = null;
 
   try {
-    [semanales, mensuales] = await Promise.all([
+    [semanales, mensuales, scl] = await Promise.all([
       listCohortesSemanales(8),
       listCohortesMensuales(6),
+      getSCL(),
     ]);
   } catch (err) {
     errorMsg = err instanceof Error ? err.message : String(err);
@@ -100,6 +104,9 @@ export default async function ComercialPage() {
         <EmptyState />
       ) : (
         <div className="space-y-8">
+          {/* SCL — Sales Cycle Length */}
+          <SCLCard scl={scl} />
+
           <CohortesTable
             title="Cohortes semanales"
             subtitle="Últimas 8 semanas, agrupadas por la semana de Junta 1"
@@ -123,6 +130,8 @@ export default async function ComercialPage() {
             (5-13d, % parcial) · ⚪ Reciente (&lt;5d, no juzgar todavía). El
             <strong style={{ color: 'var(--accent-green)' }}> ratio joya </strong>
             es Cierres ÷ Reuniones Limpias — mide tu capacidad de cierre puro.
+            {' '}<strong style={{ color: 'var(--accent-orange)' }}>No-show &gt; 35%</strong>{' '}
+            (rojo) sugiere problema de calificación previa o recordatorios.
           </p>
         </div>
       )}
@@ -181,6 +190,7 @@ function CohortesTable({
                 <th className="px-5 py-4">{fechaColLabel}</th>
                 <th className="px-4 py-4 text-right">J1 total</th>
                 <th className="px-4 py-4 text-right">Asistió</th>
+                <th className="px-4 py-4 text-right">No-show</th>
                 <th className="px-4 py-4 text-right">Limpias</th>
                 <th className="px-4 py-4 text-right">Cierres</th>
                 <th className="px-4 py-4 text-right">Tasa cierre</th>
@@ -205,6 +215,9 @@ function CohortesTable({
                     <td className="px-4 py-4 text-right tabular-nums">{fmtNumber(c.total_j1)}</td>
                     <td className="px-4 py-4 text-right tabular-nums">
                       {fmtNumber(c.asistencias)}
+                    </td>
+                    <td className="px-4 py-4 text-right tabular-nums">
+                      {renderNoShow(c.total_j1, c.asistencias)}
                     </td>
                     <td className="px-4 py-4 text-right tabular-nums">{fmtNumber(c.limpias)}</td>
                     <td className="px-4 py-4 text-right tabular-nums">{fmtNumber(c.cierres)}</td>
@@ -242,6 +255,87 @@ function CohortesTable({
           </table>
         </div>
       )}
+    </section>
+  );
+}
+
+// Render del No-show: % con color condicional. >35% → naranja. Sin J1 → —.
+function renderNoShow(total_j1: number, asistencias: number): React.ReactNode {
+  if (total_j1 === 0) {
+    return <span style={{ color: 'var(--text-pending)' }}>—</span>;
+  }
+  const noShow = ((total_j1 - asistencias) / total_j1) * 100;
+  const color = noShow > 35 ? 'var(--accent-orange)' : 'var(--text-dim)';
+  return <span style={{ color }}>{noShow.toFixed(0)}%</span>;
+}
+
+// Card SCL — promedio + P90 de días entre fecha_agenda y fecha_primer_pago
+function SCLCard({ scl }: { scl: SCL | null }) {
+  const titulo = 'SCL — Sales Cycle Length';
+  const tagline = 'Días entre agendamiento de J1 y primer pago real.';
+
+  // Sin datos suficientes
+  if (!scl || scl.count < 3) {
+    return (
+      <section
+        className="rounded-xl border p-6 md:p-8"
+        style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
+      >
+        <h2
+          className="text-[28px]"
+          style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500 }}
+        >
+          {titulo}
+        </h2>
+        <p className="text-base mt-1" style={{ color: 'var(--text-dim)' }}>{tagline}</p>
+        <p className="mt-4 text-lg" style={{ color: 'var(--text-pending)' }}>
+          SCL: — (pocos datos: {scl?.count ?? 0} de 3 mínimos).
+          Captura <code>fecha_primer_pago</code> en al menos 3 leads para activar la métrica.
+        </p>
+      </section>
+    );
+  }
+
+  return (
+    <section
+      className="rounded-xl border p-6 md:p-8"
+      style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
+    >
+      <h2
+        className="text-[28px]"
+        style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500 }}
+      >
+        {titulo}
+      </h2>
+      <p className="text-base mt-1 mb-4" style={{ color: 'var(--text-dim)' }}>
+        {tagline} Calculado sobre {scl.count} lead{scl.count === 1 ? '' : 's'} con ambas fechas.
+      </p>
+      <div className="flex flex-wrap items-baseline gap-8">
+        <div>
+          <div className="text-sm uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+            Promedio
+          </div>
+          <div
+            className="text-[44px] leading-none tracking-tight tabular-nums"
+            style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500, color: 'var(--accent-green)' }}
+          >
+            {scl.avg_dias!.toFixed(1)}
+            <span className="text-xl ml-2" style={{ color: 'var(--text-dim)' }}>días</span>
+          </div>
+        </div>
+        <div>
+          <div className="text-sm uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
+            P90 (el 10% más lento)
+          </div>
+          <div
+            className="text-[44px] leading-none tracking-tight tabular-nums"
+            style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500, color: 'var(--accent-yellow)' }}
+          >
+            {scl.p90_dias}
+            <span className="text-xl ml-2" style={{ color: 'var(--text-dim)' }}>días</span>
+          </div>
+        </div>
+      </div>
     </section>
   );
 }

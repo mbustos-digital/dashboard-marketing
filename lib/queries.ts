@@ -549,3 +549,62 @@ export async function getRevenuePeriod(
   };
 }
 
+// =============================================================================
+// SCL — Sales Cycle Length (Prompt 5)
+// =============================================================================
+// Días entre fecha_agenda y fecha_primer_pago. Solo cuenta leads que tengan
+// AMBAS fechas. Devuelve promedio y P90 (percentil 90 = el 10% más lento).
+//
+// Es distinto del dias_promedio_ciclo (J1 → cierre) que ya está en
+// v_cohortes_mensuales — ese mide cuándo se cierra la venta, no cuándo se
+// hace el primer pago real.
+//
+// Si hay <3 leads con ambas fechas, devolvemos null en ambos números — no es
+// honesto mostrar un promedio con muy pocos datos.
+// =============================================================================
+
+export type SCL = {
+  count: number;
+  avg_dias: number | null;
+  p90_dias: number | null;
+};
+
+export async function getSCL(): Promise<SCL> {
+  const supabase = getSupabaseServer();
+  const { data, error } = await supabase
+    .from('leads')
+    .select('fecha_agenda, fecha_primer_pago')
+    .not('fecha_agenda', 'is', null)
+    .not('fecha_primer_pago', 'is', null);
+
+  if (error) throw new Error(`Query SCL falló: ${error.message}`);
+
+  const rows = (data ?? []) as Array<{ fecha_agenda: string; fecha_primer_pago: string }>;
+
+  // Calcular días para cada lead. Trabajamos en UTC para evitar issues de DST.
+  const dias: number[] = [];
+  for (const r of rows) {
+    const [ay, am, ad] = r.fecha_agenda.split('-').map(Number);
+    const [py, pm, pd] = r.fecha_primer_pago.split('-').map(Number);
+    const agenda = Date.UTC(ay, am - 1, ad);
+    const pago = Date.UTC(py, pm - 1, pd);
+    const d = Math.floor((pago - agenda) / (1000 * 60 * 60 * 24));
+    if (d >= 0) dias.push(d); // ignoramos negativos (pago antes de agenda = data corrupta)
+  }
+
+  const count = dias.length;
+
+  if (count < 3) {
+    return { count, avg_dias: null, p90_dias: null };
+  }
+
+  const avg_dias = dias.reduce((s, d) => s + d, 0) / count;
+
+  // P90: ordenamos asc, tomamos el valor en la posición floor(0.9 * (n-1))
+  const sorted = [...dias].sort((a, b) => a - b);
+  const idx = Math.floor(0.9 * (count - 1));
+  const p90_dias = sorted[idx];
+
+  return { count, avg_dias, p90_dias };
+}
+
