@@ -95,6 +95,15 @@ export async function POST(request: NextRequest) {
         const empresa = extractAnswer(payload.questions_and_answers, ['empresa', 'company', 'organiz']);
         const telefono = extractAnswer(payload.questions_and_answers, ['tel', 'phone', 'celular', 'móvil', 'movil']);
 
+        // UTMs — vienen de la landing (Lovable) que los pasa al booking de
+        // Calendly. Calendly los re-emite en payload.tracking. Si el lead es
+        // orgánico, tracking puede no venir o venir vacío — todos NULL.
+        const tracking = payload.tracking;
+        const utm_source = tracking?.utm_source?.trim() || null;
+        const utm_medium = tracking?.utm_medium?.trim() || null;
+        const utm_campaign = tracking?.utm_campaign?.trim() || null;
+        const utm_content = tracking?.utm_content?.trim() || null;
+
         const { created, lead } = await upsertLeadFromCalendly({
           email,
           nombre,
@@ -102,10 +111,14 @@ export async function POST(request: NextRequest) {
           fecha_junta_1: fechaJ1,
           empresa,
           telefono,
+          utm_source,
+          utm_medium,
+          utm_campaign,
+          utm_content,
         });
 
         console.log(
-          `[webhook:calendly] ${created ? 'INSERT' : 'UPDATE'} lead id=${lead.id} email=${email} fecha_j1=${fechaJ1} ms=${ms}`,
+          `[webhook:calendly] ${created ? 'INSERT' : 'UPDATE'} lead id=${lead.id} email=${email} fecha_j1=${fechaJ1} utm_campaign=${utm_campaign ?? '—'} ms=${ms}`,
         );
 
         return Response.json({

@@ -99,6 +99,16 @@ export type CalendlyInviteePayload = {
     reason?: string;
     canceled_by?: string;
   } | null;
+  // UTMs pasados por la landing (Lovable) al booking widget de Calendly.
+  // Calendly los reenvía dentro de `tracking` en el payload del webhook.
+  tracking?: {
+    utm_source?: string | null;
+    utm_medium?: string | null;
+    utm_campaign?: string | null;
+    utm_content?: string | null;
+    utm_term?: string | null;
+    salesforce_uuid?: string | null;
+  };
 };
 
 /**

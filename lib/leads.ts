@@ -33,6 +33,12 @@ export type Lead = {
 
   adset_id_origen: string | null;
 
+  // UTMs — vienen del webhook de Calendly (vía landing en Lovable)
+  utm_source: string | null;
+  utm_medium: string | null;
+  utm_campaign: string | null;
+  utm_content: string | null;
+
   created_at: string;
   updated_at: string;
 };
@@ -44,6 +50,10 @@ export type LeadCreateInput = {
   empresa?: string | null;
   fecha_agenda?: string | null;
   fecha_junta_1?: string | null;
+  utm_source?: string | null;
+  utm_medium?: string | null;
+  utm_campaign?: string | null;
+  utm_content?: string | null;
 };
 
 export type LeadUpdateInput = {
@@ -214,8 +224,11 @@ export async function deleteLead(id: number): Promise<void> {
  * Upsert por email — usado por el webhook de Calendly.
  *
  * - Si existe lead con ese email: actualiza SOLO los campos que vienen de
- *   Calendly (nombre, email, fechas, empresa, telefono). NUNCA toca los
- *   campos manuales (asistio_j1, calificado, cerro, monto, fecha_cierre).
+ *   Calendly (nombre, email, fechas, empresa, telefono, utm_*). NUNCA toca
+ *   los campos manuales (asistio_j1, calificado, cerro, monto, fecha_cierre).
+ * - Para UTMs en UPDATE: solo sobrescribe si viene con valor. Si el lead ya
+ *   tenía un UTM y re-agenda sin UTMs, NO se borra el existente (no podemos
+ *   perder la atribución original).
  * - Si no existe: crea uno nuevo con los datos de Calendly.
  *
  * @returns { created: true } si fue insert, { created: false } si fue update.
@@ -227,6 +240,10 @@ export async function upsertLeadFromCalendly(input: {
   fecha_junta_1: string;
   empresa?: string | null;
   telefono?: string | null;
+  utm_source?: string | null;
+  utm_medium?: string | null;
+  utm_campaign?: string | null;
+  utm_content?: string | null;
 }): Promise<{ created: boolean; lead: Lead }> {
   if (!input.email || !input.email.includes('@')) {
     throw new Error('Email inválido en payload de Calendly');
@@ -244,8 +261,9 @@ export async function upsertLeadFromCalendly(input: {
 
   if (findErr) throw new Error(`Error buscando lead por email: ${findErr.message}`);
 
-  // Payload de Calendly — solo los campos que SÍ tocamos
-  const payload = {
+  // Base de payload — campos que SIEMPRE se actualizan en update (no rompen
+  // atribución existente porque son datos de contacto / agenda).
+  const basePayload = {
     nombre: input.nombre.trim(),
     email: emailNorm,
     fecha_agenda: input.fecha_agenda,
@@ -255,9 +273,19 @@ export async function upsertLeadFromCalendly(input: {
   };
 
   if (existing) {
+    // UTMs: solo incluir en el update si VIENEN con valor. Si no vienen, no
+    // los tocamos — preservamos el UTM original que ya tenía el lead.
+    const utmUpdates: Record<string, string> = {};
+    if (input.utm_source)   utmUpdates.utm_source   = input.utm_source;
+    if (input.utm_medium)   utmUpdates.utm_medium   = input.utm_medium;
+    if (input.utm_campaign) utmUpdates.utm_campaign = input.utm_campaign;
+    if (input.utm_content)  utmUpdates.utm_content  = input.utm_content;
+
+    const updatePayload = { ...basePayload, ...utmUpdates };
+
     const { data, error } = await supabase
       .from('leads')
-      .update(payload)
+      .update(updatePayload)
       .eq('id', existing.id)
       .select('*')
       .single();
@@ -265,9 +293,18 @@ export async function upsertLeadFromCalendly(input: {
     return { created: false, lead: data as Lead };
   }
 
+  // INSERT: incluimos UTMs aunque sean null (lead nuevo, no hay nada que pisar)
+  const insertPayload = {
+    ...basePayload,
+    utm_source:   input.utm_source   ?? null,
+    utm_medium:   input.utm_medium   ?? null,
+    utm_campaign: input.utm_campaign ?? null,
+    utm_content:  input.utm_content  ?? null,
+  };
+
   const { data, error } = await supabase
     .from('leads')
-    .insert(payload)
+    .insert(insertPayload)
     .select('*')
     .single();
   if (error) throw new Error(`Error creando lead desde Calendly: ${error.message}`);
