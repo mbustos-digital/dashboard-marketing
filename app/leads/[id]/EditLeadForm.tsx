@@ -45,6 +45,16 @@ export function EditLeadForm({ lead }: { lead: Lead }) {
   const [fechaCierre, setFechaCierre] = useState(lead.fecha_cierre ?? '');
   const [fechaConfirmacion, setFechaConfirmacion] = useState(lead.fecha_confirmacion ?? '');
 
+  // Cobranza (ortogonal al cierre)
+  const [fechaPrimerPago, setFechaPrimerPago] = useState(lead.fecha_primer_pago ?? '');
+  const [montoPrimerPago, setMontoPrimerPago] = useState<string>(
+    lead.monto_primer_pago?.toString() ?? '',
+  );
+  const [totalCobrado, setTotalCobrado] = useState<string>(
+    lead.total_cobrado_usd?.toString() ?? '',
+  );
+  const [fechaInicioServicio, setFechaInicioServicio] = useState(lead.fecha_inicio_servicio ?? '');
+
   // ── Reglas de dependencia (UI) ──
   const asistioJ1Disabled = !fechaJ1;
   const calificadoDisabled = asistioJ1 !== true;
@@ -107,6 +117,10 @@ export function EditLeadForm({ lead }: { lead: Lead }) {
       monto_cierre_usd: cerro === true ? parseFloat(montoCierre) : null,
       fecha_cierre: cerro === true ? fechaCierre || null : null,
       fecha_confirmacion: fechaConfirmacion || null,
+      fecha_primer_pago: fechaPrimerPago || null,
+      monto_primer_pago: montoPrimerPago.trim() ? parseFloat(montoPrimerPago) : null,
+      total_cobrado_usd: totalCobrado.trim() ? parseFloat(totalCobrado) : null,
+      fecha_inicio_servicio: fechaInicioServicio || null,
     };
 
     startTransition(async () => {
@@ -225,6 +239,59 @@ export function EditLeadForm({ lead }: { lead: Lead }) {
             </Field>
           </div>
         )}
+      </Card>
+
+      {/* ─── COBRANZA ─── */}
+      <Card title="Cobranza">
+        <p className="text-base mb-5" style={{ color: 'var(--text-dim)' }}>
+          Lo realmente cobrado del cliente. Es independiente del cierre (puede
+          haber cierre vendido sin pagos aún, o pagos sin que cierre = Sí esté
+          marcado todavía).
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          <Field label="Fecha primer pago">
+            <TextInput type="date" value={fechaPrimerPago} onChange={setFechaPrimerPago} />
+          </Field>
+          <Field label="Primer pago (USD)">
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={montoPrimerPago}
+              onChange={(e) => setMontoPrimerPago(e.target.value)}
+              className="w-full px-3 py-2 rounded border text-lg"
+              style={{
+                background: '#0a0a0a',
+                borderColor: 'var(--card-border)',
+                color: 'var(--text)',
+              }}
+            />
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mt-5">
+          <Field
+            label="Total cobrado (USD)"
+            hint="Acumulado hasta hoy. Actualizá conforme entren pagos."
+          >
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              value={totalCobrado}
+              onChange={(e) => setTotalCobrado(e.target.value)}
+              className="w-full px-3 py-2 rounded border text-lg"
+              style={{
+                background: '#0a0a0a',
+                borderColor: 'var(--card-border)',
+                color: 'var(--text)',
+              }}
+            />
+          </Field>
+          <Field label="Fecha inicio servicio">
+            <TextInput type="date" value={fechaInicioServicio} onChange={setFechaInicioServicio} />
+          </Field>
+        </div>
       </Card>
 
       {/* ─── FEEDBACK + ACCIONES ─── */}

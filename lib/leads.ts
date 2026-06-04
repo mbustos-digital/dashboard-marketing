@@ -34,6 +34,12 @@ export type Lead = {
   // Confirmación verbal entre J2 y primer pago (opcional, para medir SCL)
   fecha_confirmacion: string | null;
 
+  // Cobranza — ortogonal a cierre. Cierre = vendido. Estos = cobrado.
+  fecha_primer_pago: string | null;
+  monto_primer_pago: number | null;
+  total_cobrado_usd: number | null;
+  fecha_inicio_servicio: string | null;
+
   adset_id_origen: string | null;
 
   // UTMs — vienen del webhook de Calendly (vía landing en Lovable)
@@ -79,6 +85,12 @@ export type LeadUpdateInput = {
 
   // Confirmación verbal entre J2 y primer pago
   fecha_confirmacion?: string | null;
+
+  // Cobranza
+  fecha_primer_pago?: string | null;
+  monto_primer_pago?: number | null;
+  total_cobrado_usd?: number | null;
+  fecha_inicio_servicio?: string | null;
 };
 
 export type EstadoMadurez = 'madura' | 'madurando' | 'reciente' | 'sin_j1';
@@ -206,6 +218,10 @@ export async function updateLead(
     monto_cierre_usd: merged.monto_cierre_usd,
     fecha_cierre: merged.fecha_cierre,
     fecha_confirmacion: merged.fecha_confirmacion,
+    fecha_primer_pago: merged.fecha_primer_pago,
+    monto_primer_pago: merged.monto_primer_pago,
+    total_cobrado_usd: merged.total_cobrado_usd,
+    fecha_inicio_servicio: merged.fecha_inicio_servicio,
   };
 
   const { data, error } = await supabase
