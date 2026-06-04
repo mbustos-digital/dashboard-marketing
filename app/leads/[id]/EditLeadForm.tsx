@@ -43,6 +43,7 @@ export function EditLeadForm({ lead }: { lead: Lead }) {
     lead.monto_cierre_usd?.toString() ?? '',
   );
   const [fechaCierre, setFechaCierre] = useState(lead.fecha_cierre ?? '');
+  const [fechaConfirmacion, setFechaConfirmacion] = useState(lead.fecha_confirmacion ?? '');
 
   // ── Reglas de dependencia (UI) ──
   const asistioJ1Disabled = !fechaJ1;
@@ -105,6 +106,7 @@ export function EditLeadForm({ lead }: { lead: Lead }) {
       cerro,
       monto_cierre_usd: cerro === true ? parseFloat(montoCierre) : null,
       fecha_cierre: cerro === true ? fechaCierre || null : null,
+      fecha_confirmacion: fechaConfirmacion || null,
     };
 
     startTransition(async () => {
@@ -181,6 +183,15 @@ export function EditLeadForm({ lead }: { lead: Lead }) {
           </Field>
           <Field label="¿Asistió a J2?" disabled={asistioJ2Disabled} hint={asistioJ2Disabled ? 'Marca fecha J2 primero' : undefined}>
             <TriToggle value={asistioJ2} onChange={setAsistioJ2} disabled={asistioJ2Disabled} />
+          </Field>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mt-5">
+          <Field
+            label="Fecha de confirmación (opcional)"
+            hint="Cuándo el cliente confirmó verbalmente el cierre (entre J2 y primer pago)."
+          >
+            <TextInput type="date" value={fechaConfirmacion} onChange={setFechaConfirmacion} />
           </Field>
         </div>
       </Card>
