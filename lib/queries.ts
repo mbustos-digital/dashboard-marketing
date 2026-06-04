@@ -427,3 +427,125 @@ export async function getCACAcumulado(hastaFecha?: string): Promise<CACAcumulado
   return { spend_total_mxn, cierres_total, cac_mxn };
 }
 
+// =============================================================================
+// Revenue del período — Prompt 4
+// =============================================================================
+// Sección 'Revenue del período':
+//   - Sold Revenue: SUM(monto_cierre_usd) de leads con cerro=true y
+//     fecha_cierre dentro del período (en USD)
+//   - Cash Collected: SUM(total_cobrado_usd) de leads con fecha_primer_pago
+//     dentro del período (en USD)
+//   - Outstanding: Sold Revenue - Cash Collected
+//
+// Sección 'Eficiencia':
+//   - Meta Spend del período: SUM(spend) de marketing_metrics_daily donde
+//     plataforma='meta' (en MXN — Meta cobra en pesos)
+//   - CAC real: Meta Spend / cantidad de leads con fecha_primer_pago en el
+//     período (¡es MXN/cliente, mezclar con USD daría sin sentido!)
+//   - ROAS cash: Cash Collected (USD) / Meta Spend (MXN) — magnitud "x" sin
+//     unidad porque mezclamos monedas; igual sirve como tendencia
+//   - ROAS sold: Sold Revenue (USD) / Meta Spend (MXN) — idem
+// =============================================================================
+
+export type RevenuePeriod = {
+  start: string;
+  end: string;
+
+  // Revenue del período (USD)
+  sold_revenue_usd: number;
+  cash_collected_usd: number;
+  outstanding_usd: number;
+
+  // Conteos de soporte
+  cierres_en_periodo: number;
+  primeros_pagos_en_periodo: number;
+
+  // Eficiencia
+  meta_spend_mxn: number;
+  cac_mxn: number | null;        // MXN por cliente nuevo (con primer pago)
+  roas_cash: number | null;      // ratio USD/MXN — útil como tendencia
+  roas_sold: number | null;      // ratio USD/MXN — útil como tendencia
+};
+
+export async function getRevenuePeriod(
+  start: string,
+  end: string,
+): Promise<RevenuePeriod> {
+  const supabase = getSupabaseServer();
+
+  const [soldRes, cashRes, spendRes, primerosPagosCountRes] = await Promise.all([
+    // Sold: cerros del período
+    supabase
+      .from('leads')
+      .select('monto_cierre_usd')
+      .eq('cerro', true)
+      .gte('fecha_cierre', start)
+      .lte('fecha_cierre', end),
+    // Cash: primeros pagos del período
+    supabase
+      .from('leads')
+      .select('total_cobrado_usd')
+      .gte('fecha_primer_pago', start)
+      .lte('fecha_primer_pago', end),
+    // Spend Meta del período (MXN)
+    supabase
+      .from('marketing_metrics_daily')
+      .select('spend')
+      .eq('plataforma', 'meta')
+      .gte('fecha', start)
+      .lte('fecha', end),
+    // Count de clientes con primer pago en el período (denominador del CAC real)
+    supabase
+      .from('leads')
+      .select('id', { count: 'exact', head: true })
+      .gte('fecha_primer_pago', start)
+      .lte('fecha_primer_pago', end),
+  ]);
+
+  if (soldRes.error) throw new Error(`Sold falló: ${soldRes.error.message}`);
+  if (cashRes.error) throw new Error(`Cash falló: ${cashRes.error.message}`);
+  if (spendRes.error) throw new Error(`Spend falló: ${spendRes.error.message}`);
+  if (primerosPagosCountRes.error) {
+    throw new Error(`Primeros pagos count falló: ${primerosPagosCountRes.error.message}`);
+  }
+
+  const sold_revenue_usd = (soldRes.data ?? []).reduce(
+    (acc, r) => acc + Number(r.monto_cierre_usd ?? 0),
+    0,
+  );
+  const cash_collected_usd = (cashRes.data ?? []).reduce(
+    (acc, r) => acc + Number(r.total_cobrado_usd ?? 0),
+    0,
+  );
+  const outstanding_usd = sold_revenue_usd - cash_collected_usd;
+
+  const meta_spend_mxn = (spendRes.data ?? []).reduce(
+    (acc, r) => acc + Number(r.spend ?? 0),
+    0,
+  );
+
+  const cierres_en_periodo = (soldRes.data ?? []).length;
+  const primeros_pagos_en_periodo = primerosPagosCountRes.count ?? 0;
+
+  const cac_mxn =
+    primeros_pagos_en_periodo > 0 ? meta_spend_mxn / primeros_pagos_en_periodo : null;
+  const roas_cash =
+    meta_spend_mxn > 0 ? cash_collected_usd / meta_spend_mxn : null;
+  const roas_sold =
+    meta_spend_mxn > 0 ? sold_revenue_usd / meta_spend_mxn : null;
+
+  return {
+    start,
+    end,
+    sold_revenue_usd,
+    cash_collected_usd,
+    outstanding_usd,
+    cierres_en_periodo,
+    primeros_pagos_en_periodo,
+    meta_spend_mxn,
+    cac_mxn,
+    roas_cash,
+    roas_sold,
+  };
+}
+

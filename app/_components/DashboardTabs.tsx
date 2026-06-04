@@ -4,11 +4,12 @@
 
 import Link from 'next/link';
 
-export type TabKey = 'marketing' | 'comercial' | 'general';
+export type TabKey = 'marketing' | 'comercial' | 'revenue' | 'general';
 
 const TABS: Array<{ key: TabKey; label: string; href: string }> = [
   { key: 'marketing', label: 'Marketing', href: '/' },
   { key: 'comercial', label: 'Comercial', href: '/comercial' },
+  { key: 'revenue', label: 'Revenue', href: '/revenue' },
   { key: 'general', label: 'Vista General', href: '/general' },
 ];
 
