@@ -34,15 +34,6 @@ function fmtNumber(n: number | null | undefined): string {
   return new Intl.NumberFormat('es-MX').format(Math.round(n));
 }
 
-function fmtMXN(n: number | null | undefined): string {
-  if (n === null || n === undefined || !Number.isFinite(n)) return '—';
-  return new Intl.NumberFormat('es-MX', {
-    style: 'currency',
-    currency: 'MXN',
-    maximumFractionDigits: 0,
-  }).format(n);
-}
-
 function fmtUSD(n: number | null | undefined): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return '—';
   return new Intl.NumberFormat('en-US', {
@@ -243,7 +234,7 @@ export default async function GeneralPage({
               />
               <KPI
                 label="Inversión total"
-                value={fmtMXN(mes.spend_usd)}
+                value={fmtUSD(mes.spend_usd)}
                 accent="yellow"
               />
             </Grid>

@@ -42,15 +42,6 @@ function fmtUSD(n: number | null | undefined): string {
   }).format(n);
 }
 
-function fmtMXN(n: number | null | undefined): string {
-  if (n === null || n === undefined || !Number.isFinite(n)) return '—';
-  return new Intl.NumberFormat('es-MX', {
-    style: 'currency',
-    currency: 'MXN',
-    maximumFractionDigits: 0,
-  }).format(n);
-}
-
 function fmtRatio(n: number | null | undefined): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return '—';
   return `${n.toFixed(2)}x`;
@@ -141,20 +132,20 @@ export default async function RevenuePage({
             </Grid>
           </Section>
 
-          {/* EFICIENCIA */}
+          {/* EFICIENCIA — post-Fase 1 todo en USD, ROAS válidos */}
           <Section
             title="Eficiencia"
-            subtitle="Mezcla USD (revenue) con MXN (spend). ROAS sirve como tendencia, no como valor absoluto."
+            subtitle="Todos los valores en USD. El spend de Meta se convierte desde MXN automáticamente."
           >
             <Grid>
               <KPI
                 label="Meta Spend"
-                value={fmtMXN(revenue.meta_spend_mxn)}
+                value={fmtUSD(revenue.meta_spend_usd)}
                 accent="default"
               />
               <KPI
                 label="CAC real"
-                value={fmtMXN(revenue.cac_mxn)}
+                value={fmtUSD(revenue.cac_usd)}
                 accent="default"
                 hint={
                   revenue.primeros_pagos_en_periodo > 0

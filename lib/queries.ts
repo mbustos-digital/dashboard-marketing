@@ -6,6 +6,7 @@
 // =============================================================================
 
 import { getSupabaseServer } from './supabase';
+import { TIPO_DE_CAMBIO_USD_MXN } from './config';
 
 export type MarketingWindow = {
   // Rango
@@ -171,7 +172,12 @@ export async function getMarketingWindow(
   const clicks = sum(metaRows.map((r) => r.clicks));
   const link_clicks = sum(metaRows.map((r) => r.link_clicks));
   const reach = sum(metaRows.map((r) => r.reach));
-  const spend_usd = sum(metaRows.map((r) => r.spend));
+  // Meta devuelve spend en MXN (la cuenta está en MXN). Convertimos a USD
+  // ANTES de cualquier cálculo para que los ratios sean válidos contra el
+  // revenue en USD. spend_usd ahora es realmente USD (antes era un alias
+  // legacy que guardaba MXN).
+  const spend_mxn = sum(metaRows.map((r) => r.spend));
+  const spend_usd = spend_mxn / TIPO_DE_CAMBIO_USD_MXN;
 
   // ── YouTube aggregates por tipo ──
   const vslRows = ytRows.filter((r) => r.youtube_video_type === 'vsl');
@@ -391,10 +397,13 @@ export async function getResumenComercialMaduras(): Promise<ResumenComercialMadu
 // este acumulado o vs meses anteriores.
 // =============================================================================
 
+// Toda la app expresa montos en USD post-Fase 1. El spend de Meta llega en
+// MXN desde la API; convertimos antes de retornar para que los ratios sean
+// matemáticamente válidos.
 export type CACAcumulado = {
-  spend_total_mxn: number;
+  spend_total_usd: number;       // convertido desde MXN
   cierres_total: number;
-  cac_mxn: number | null;
+  cac_usd: number | null;        // USD / cliente
 };
 
 export async function getCACAcumulado(hastaFecha?: string): Promise<CACAcumulado> {
@@ -421,10 +430,11 @@ export async function getCACAcumulado(hastaFecha?: string): Promise<CACAcumulado
     (acc, r) => acc + Number(r.spend ?? 0),
     0,
   );
+  const spend_total_usd = spend_total_mxn / TIPO_DE_CAMBIO_USD_MXN;
   const cierres_total = cierresRes.count ?? 0;
-  const cac_mxn = cierres_total > 0 ? spend_total_mxn / cierres_total : null;
+  const cac_usd = cierres_total > 0 ? spend_total_usd / cierres_total : null;
 
-  return { spend_total_mxn, cierres_total, cac_mxn };
+  return { spend_total_usd, cierres_total, cac_usd };
 }
 
 // =============================================================================
@@ -460,11 +470,12 @@ export type RevenuePeriod = {
   cierres_en_periodo: number;
   primeros_pagos_en_periodo: number;
 
-  // Eficiencia
-  meta_spend_mxn: number;
-  cac_mxn: number | null;        // MXN por cliente nuevo (con primer pago)
-  roas_cash: number | null;      // ratio USD/MXN — útil como tendencia
-  roas_sold: number | null;      // ratio USD/MXN — útil como tendencia
+  // Eficiencia — TODO en USD post-Fase 1 (spend convertido vía
+  // TIPO_DE_CAMBIO_USD_MXN). Los ROAS ahora son matemáticamente válidos.
+  meta_spend_usd: number;
+  cac_usd: number | null;        // USD por cliente nuevo (con primer pago)
+  roas_cash: number | null;      // Cash USD ÷ Spend USD — ratio válido
+  roas_sold: number | null;      // Sold USD ÷ Spend USD — ratio válido
 };
 
 export async function getRevenuePeriod(
@@ -523,16 +534,18 @@ export async function getRevenuePeriod(
     (acc, r) => acc + Number(r.spend ?? 0),
     0,
   );
+  // Convertir a USD ANTES de cualquier ratio (Fase 1 del mentor)
+  const meta_spend_usd = meta_spend_mxn / TIPO_DE_CAMBIO_USD_MXN;
 
   const cierres_en_periodo = (soldRes.data ?? []).length;
   const primeros_pagos_en_periodo = primerosPagosCountRes.count ?? 0;
 
-  const cac_mxn =
-    primeros_pagos_en_periodo > 0 ? meta_spend_mxn / primeros_pagos_en_periodo : null;
+  const cac_usd =
+    primeros_pagos_en_periodo > 0 ? meta_spend_usd / primeros_pagos_en_periodo : null;
   const roas_cash =
-    meta_spend_mxn > 0 ? cash_collected_usd / meta_spend_mxn : null;
+    meta_spend_usd > 0 ? cash_collected_usd / meta_spend_usd : null;
   const roas_sold =
-    meta_spend_mxn > 0 ? sold_revenue_usd / meta_spend_mxn : null;
+    meta_spend_usd > 0 ? sold_revenue_usd / meta_spend_usd : null;
 
   return {
     start,
@@ -542,8 +555,8 @@ export async function getRevenuePeriod(
     outstanding_usd,
     cierres_en_periodo,
     primeros_pagos_en_periodo,
-    meta_spend_mxn,
-    cac_mxn,
+    meta_spend_usd,
+    cac_usd,
     roas_cash,
     roas_sold,
   };
@@ -678,8 +691,10 @@ export async function getDistribucionPipeline(): Promise<DistribucionPipeline> {
 // =============================================================================
 // CAC mensual (Prompt 11)
 // =============================================================================
-// CAC del mes = SUM(spend Meta del mes) / leads con fecha_primer_pago en el
-// mismo mes. MXN/cliente. Solo retornamos meses con ≥1 primer pago.
+// CAC del mes = SUM(spend Meta del mes USD) / leads con fecha_primer_pago en
+// el mismo mes. USD/cliente. Solo retornamos meses con ≥1 primer pago.
+//
+// Post-Fase 1: spend convertido a USD vía TIPO_DE_CAMBIO_USD_MXN.
 //
 // Se devuelve la lista ordenada cronológicamente (más viejo → más reciente),
 // limitada a últimos N meses con datos.
@@ -687,9 +702,9 @@ export async function getDistribucionPipeline(): Promise<DistribucionPipeline> {
 
 export type CACMensualEntry = {
   mes: string;              // 'YYYY-MM'
-  spend_mxn: number;
+  spend_usd: number;        // convertido desde MXN
   primeros_pagos: number;
-  cac_mxn: number;          // siempre definido (>0 por filtro de ≥1 pago)
+  cac_usd: number;          // USD por cliente — siempre definido (>0 por filtro)
 };
 
 export async function listCACMensual(limit = 12): Promise<CACMensualEntry[]> {
@@ -710,7 +725,7 @@ export async function listCACMensual(limit = 12): Promise<CACMensualEntry[]> {
   if (spendRes.error) throw new Error(`Spend mensual falló: ${spendRes.error.message}`);
   if (pagosRes.error) throw new Error(`Pagos mensual falló: ${pagosRes.error.message}`);
 
-  // Agrupar spend por YYYY-MM
+  // Agrupar spend por YYYY-MM (sumamos en MXN, convertimos al final del mes)
   const spendPorMes = new Map<string, number>();
   for (const r of spendRes.data ?? []) {
     if (!r.fecha) continue;
@@ -731,11 +746,12 @@ export async function listCACMensual(limit = 12): Promise<CACMensualEntry[]> {
   for (const [mes, primeros_pagos] of pagosPorMes) {
     if (primeros_pagos <= 0) continue;
     const spend_mxn = spendPorMes.get(mes) ?? 0;
+    const spend_usd = spend_mxn / TIPO_DE_CAMBIO_USD_MXN;
     entries.push({
       mes,
-      spend_mxn,
+      spend_usd,
       primeros_pagos,
-      cac_mxn: spend_mxn / primeros_pagos,
+      cac_usd: spend_usd / primeros_pagos,
     });
   }
 

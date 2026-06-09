@@ -38,10 +38,11 @@ function fmtNumber(n: number | null | undefined): string {
 }
 
 function fmtCurrency(n: number | null | undefined): string {
+  // Post-Fase 1: TODO en USD (spend Meta convertido vía TIPO_DE_CAMBIO_USD_MXN)
   if (n === null || n === undefined || !Number.isFinite(n)) return '—';
-  return new Intl.NumberFormat('es-MX', {
+  return new Intl.NumberFormat('en-US', {
     style: 'currency',
-    currency: 'MXN',
+    currency: 'USD',
     maximumFractionDigits: 2,
   }).format(n);
 }
@@ -571,15 +572,15 @@ function CACMensualChart({
           <code>fecha_primer_pago</code> en al menos 1 lead para activar la
           tendencia.
         </p>
-        {cacGlobal && cacGlobal.cac_mxn !== null && (
+        {cacGlobal && cacGlobal.cac_usd !== null && (
           <p className="text-sm mt-3" style={{ color: 'var(--text-dim)' }}>
             CAC acumulado histórico (referencia, basado en cierre):{' '}
             <strong>{
-              new Intl.NumberFormat('es-MX', {
+              new Intl.NumberFormat('en-US', {
                 style: 'currency',
-                currency: 'MXN',
+                currency: 'USD',
                 maximumFractionDigits: 0,
-              }).format(cacGlobal.cac_mxn)
+              }).format(cacGlobal.cac_usd)
             }</strong>{' '}
             ÷ {cacGlobal.cierres_total} cierre{cacGlobal.cierres_total === 1 ? '' : 's'}
           </p>
@@ -589,15 +590,15 @@ function CACMensualChart({
   }
 
   // Max para escalar barras
-  const maxCAC = Math.max(...entries.map((e) => e.cac_mxn));
-  const fmtMXN0 = new Intl.NumberFormat('es-MX', {
+  const maxCAC = Math.max(...entries.map((e) => e.cac_usd));
+  const fmtUSD0 = new Intl.NumberFormat('en-US', {
     style: 'currency',
-    currency: 'MXN',
+    currency: 'USD',
     maximumFractionDigits: 0,
   });
 
   // CAC promedio del periodo mostrado (los meses con pagos)
-  const totalSpend = entries.reduce((s, e) => s + e.spend_mxn, 0);
+  const totalSpend = entries.reduce((s, e) => s + e.spend_usd, 0);
   const totalPagos = entries.reduce((s, e) => s + e.primeros_pagos, 0);
   const cacPromedioPeriodo = totalPagos > 0 ? totalSpend / totalPagos : null;
 
@@ -612,7 +613,7 @@ function CACMensualChart({
             CAC mensual — tendencia
           </div>
           <p className="text-base" style={{ color: 'var(--text-dim)' }}>
-            Spend Meta del mes ÷ leads con primer pago en ese mes. Solo meses con ≥1 pago.
+            Spend Meta del mes (USD) ÷ leads con primer pago en ese mes. Solo meses con ≥1 pago.
           </p>
         </div>
         {cacPromedioPeriodo !== null && (
@@ -620,7 +621,7 @@ function CACMensualChart({
             className="text-[22px] tracking-tight tabular-nums"
             style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500, color: 'var(--accent-yellow)' }}
           >
-            Promedio: {fmtMXN0.format(cacPromedioPeriodo)} / cliente
+            Promedio: {fmtUSD0.format(cacPromedioPeriodo)} / cliente
           </div>
         )}
       </div>
@@ -628,7 +629,7 @@ function CACMensualChart({
       {/* Barras horizontales: una fila por mes */}
       <div className="space-y-2">
         {entries.map((e) => {
-          const widthPct = maxCAC > 0 ? (e.cac_mxn / maxCAC) * 100 : 0;
+          const widthPct = maxCAC > 0 ? (e.cac_usd / maxCAC) * 100 : 0;
           return (
             <div key={e.mes} className="flex items-center gap-3 text-base">
               <div className="w-20 shrink-0" style={{ color: 'var(--text-dim)' }}>
@@ -642,11 +643,11 @@ function CACMensualChart({
                     background: 'var(--accent-yellow)',
                     opacity: 0.85,
                   }}
-                  title={`${fmtMesCorto(e.mes)}: ${fmtMXN0.format(e.cac_mxn)} (${e.primeros_pagos} cliente${e.primeros_pagos === 1 ? '' : 's'})`}
+                  title={`${fmtMesCorto(e.mes)}: ${fmtUSD0.format(e.cac_usd)} (${e.primeros_pagos} cliente${e.primeros_pagos === 1 ? '' : 's'})`}
                 />
               </div>
               <div className="w-32 shrink-0 text-right tabular-nums" style={{ color: 'var(--text)' }}>
-                {fmtMXN0.format(e.cac_mxn)}
+                {fmtUSD0.format(e.cac_usd)}
               </div>
               <div className="w-20 shrink-0 text-right text-sm tabular-nums" style={{ color: 'var(--text-pending)' }}>
                 {e.primeros_pagos} {e.primeros_pagos === 1 ? 'cliente' : 'clientes'}
@@ -657,12 +658,12 @@ function CACMensualChart({
       </div>
 
       {/* Acumulado histórico — referencia secundaria */}
-      {cacGlobal && cacGlobal.cac_mxn !== null && (
+      {cacGlobal && cacGlobal.cac_usd !== null && (
         <p className="text-sm mt-4" style={{ color: 'var(--text-dim)' }}>
           CAC acumulado histórico (referencia, basado en <em>cierres</em> firmados —
           no en primeros pagos):{' '}
           <strong style={{ color: 'var(--text)' }}>
-            {fmtMXN0.format(cacGlobal.cac_mxn)}
+            {fmtUSD0.format(cacGlobal.cac_usd)}
           </strong>{' '}
           · {cacGlobal.cierres_total} cierre{cacGlobal.cierres_total === 1 ? '' : 's'}
         </p>
