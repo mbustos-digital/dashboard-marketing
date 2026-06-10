@@ -119,6 +119,9 @@ export async function POST(request: NextRequest) {
         const utm_medium = tracking?.utm_medium?.trim() || null;
         const utm_campaign = tracking?.utm_campaign?.trim() || null;
         const utm_content = tracking?.utm_content?.trim() || null;
+        // utm_term transporta el UUID anónimo de la landing (cookie
+        // nqe_visitor_id) — cruza al lead con sus eventos de VSL (Fase 6).
+        const visitor_id = tracking?.utm_term?.trim() || null;
 
         const { created, lead } = await upsertLeadFromCalendly({
           email,
@@ -135,6 +138,7 @@ export async function POST(request: NextRequest) {
           respuesta_colaboradores,
           respuesta_objetivo,
           respuesta_cuando_empezar,
+          visitor_id,
         });
 
         console.log(

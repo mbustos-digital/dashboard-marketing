@@ -64,6 +64,10 @@ export type Lead = {
   origen_lead: string | null;            // 'instant_form' | 'calendly' | null
   telefono_normalizado: string | null;   // solo dígitos — llave de match
 
+  // UUID anónimo de la landing (cookie nqe_visitor_id, llega como utm_term).
+  // Cruza con vsl_events para saber si el lead vio el VSL.
+  visitor_id: string | null;
+
   created_at: string;
   updated_at: string;
 };
@@ -90,6 +94,7 @@ export type LeadCreateInput = {
   meta_adset_name?: string | null;
   origen_lead?: string | null;
   telefono_normalizado?: string | null;
+  visitor_id?: string | null;
 };
 
 export type LeadUpdateInput = {
@@ -481,6 +486,7 @@ export async function upsertLeadFromCalendly(input: {
   respuesta_colaboradores?: string | null;
   respuesta_objetivo?: string | null;
   respuesta_cuando_empezar?: string | null;
+  visitor_id?: string | null;
 }): Promise<{ created: boolean; lead: Lead }> {
   if (!input.email || !input.email.includes('@')) {
     throw new Error('Email inválido en payload de Calendly');
@@ -538,6 +544,7 @@ export async function upsertLeadFromCalendly(input: {
     if (input.respuesta_colaboradores) extraUpdates.respuesta_colaboradores = input.respuesta_colaboradores;
     if (input.respuesta_objetivo)      extraUpdates.respuesta_objetivo      = input.respuesta_objetivo;
     if (input.respuesta_cuando_empezar) extraUpdates.respuesta_cuando_empezar = input.respuesta_cuando_empezar;
+    if (input.visitor_id)              extraUpdates.visitor_id              = input.visitor_id;
 
     const updatePayload = { ...basePayload, ...extraUpdates };
 
@@ -563,6 +570,7 @@ export async function upsertLeadFromCalendly(input: {
     respuesta_colaboradores:  input.respuesta_colaboradores  ?? null,
     respuesta_objetivo:       input.respuesta_objetivo       ?? null,
     respuesta_cuando_empezar: input.respuesta_cuando_empezar ?? null,
+    visitor_id:               input.visitor_id               ?? null,
   };
 
   const { data, error } = await supabase
@@ -608,4 +616,28 @@ export function labelMadurez(estado: EstadoMadurez): { emoji: string; label: str
     case 'sin_j1':
       return { emoji: '—', label: 'Sin J1', color: 'var(--text-pending)' };
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VSL tracking (Fase 6)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Cuenta cuántos eventos vsl_play tiene un visitor_id en vsl_events.
+ * Para la ficha del lead (Fase 7): "vio el VSL N veces".
+ * @returns 0 si visitorId es null o no hay eventos.
+ */
+export async function contarVslPlays(visitorId: string | null): Promise<number> {
+  if (!visitorId) return 0;
+  const supabase = getSupabaseServer();
+  const { count, error } = await supabase
+    .from('vsl_events')
+    .select('id', { count: 'exact', head: true })
+    .eq('visitor_id', visitorId)
+    .eq('event', 'vsl_play');
+  if (error) {
+    console.error(`[contarVslPlays] falló: ${error.message}`);
+    return 0;
+  }
+  return count ?? 0;
 }
