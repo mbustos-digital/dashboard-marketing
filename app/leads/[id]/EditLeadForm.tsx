@@ -171,6 +171,9 @@ export function EditLeadForm({ lead }: { lead: Lead }) {
         </div>
       </Card>
 
+      {/* ─── RESPUESTAS DEL FORMULARIO (read-only) ─── */}
+      <RespuestasCalendlyCard lead={lead} />
+
       {/* ─── COMERCIAL ─── */}
       <Card title="Datos comerciales">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
@@ -461,5 +464,52 @@ function TriToggle({
         );
       })}
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RespuestasCalendlyCard — read-only, datos del formulario (Fase 2)
+// ─────────────────────────────────────────────────────────────────────────────
+function RespuestasCalendlyCard({ lead }: { lead: Lead }) {
+  const rows: Array<{ label: string; value: string | null }> = [
+    { label: 'Facturación / Presupuesto', value: lead.respuesta_facturacion },
+    { label: 'Tamaño del equipo',         value: lead.respuesta_colaboradores },
+    { label: '¿Qué quiere lograr?',       value: lead.respuesta_objetivo },
+    { label: '¿Cuándo quiere empezar?',   value: lead.respuesta_cuando_empezar },
+  ];
+
+  const hayAlguna = rows.some((r) => r.value && r.value.trim());
+
+  return (
+    <Card title="Respuestas del formulario">
+      {!hayAlguna ? (
+        <p className="text-base" style={{ color: 'var(--text-pending)' }}>
+          Sin respuestas capturadas. Probablemente un lead orgánico, manual, o
+          agendado antes de que el form de Calendly tuviera estas preguntas.
+        </p>
+      ) : (
+        <div className="space-y-4">
+          {rows.map((r) => (
+            <div key={r.label}>
+              <div
+                className="text-sm uppercase tracking-wider mb-1"
+                style={{ color: 'var(--text-dim)' }}
+              >
+                {r.label}
+              </div>
+              <div
+                className="text-lg"
+                style={{ color: r.value ? 'var(--text)' : 'var(--text-pending)' }}
+              >
+                {r.value && r.value.trim() ? r.value : '—'}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <p className="text-sm mt-4" style={{ color: 'var(--text-pending)' }}>
+        Datos automáticos del webhook de Calendly. Solo lectura.
+      </p>
+    </Card>
   );
 }

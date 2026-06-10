@@ -95,6 +95,22 @@ export async function POST(request: NextRequest) {
         const empresa = extractAnswer(payload.questions_and_answers, ['empresa', 'company', 'organiz']);
         const telefono = extractAnswer(payload.questions_and_answers, ['tel', 'phone', 'celular', 'móvil', 'movil']);
 
+        // Respuestas de calificación — Fase 2 del segundo plan del mentor.
+        // Keywords flexibles porque el texto exacto del form puede variar.
+        // extractAnswer hace substring match case-insensitive.
+        const respuesta_facturacion = extractAnswer(payload.questions_and_answers, [
+          'facturación', 'facturacion', 'presupuesto', 'budget', 'ingreso anual', 'ingresos',
+        ]);
+        const respuesta_colaboradores = extractAnswer(payload.questions_and_answers, [
+          'colaborador', 'equipo', 'empleado', 'tamaño', 'tamano', 'cuántas personas', 'cuantas personas',
+        ]);
+        const respuesta_objetivo = extractAnswer(payload.questions_and_answers, [
+          'objetivo', 'lograr', 'meta', 'qué quieres', 'que quieres', 'qué querés', 'que queres',
+        ]);
+        const respuesta_cuando_empezar = extractAnswer(payload.questions_and_answers, [
+          'cuándo empezar', 'cuando empezar', 'cuándo iniciar', 'cuando iniciar', 'cuándo te gustaría', 'cuando te gustaria', 'urgencia', 'cuándo comenzar', 'cuando comenzar',
+        ]);
+
         // UTMs — vienen de la landing (Lovable) que los pasa al booking de
         // Calendly. Calendly los re-emite en payload.tracking. Si el lead es
         // orgánico, tracking puede no venir o venir vacío — todos NULL.
@@ -115,6 +131,10 @@ export async function POST(request: NextRequest) {
           utm_medium,
           utm_campaign,
           utm_content,
+          respuesta_facturacion,
+          respuesta_colaboradores,
+          respuesta_objetivo,
+          respuesta_cuando_empezar,
         });
 
         console.log(

@@ -49,6 +49,12 @@ export type Lead = {
   utm_campaign: string | null;
   utm_content: string | null;
 
+  // Respuestas del formulario Calendly (calificación previa a J1)
+  respuesta_facturacion: string | null;
+  respuesta_colaboradores: string | null;
+  respuesta_objetivo: string | null;
+  respuesta_cuando_empezar: string | null;
+
   created_at: string;
   updated_at: string;
 };
@@ -64,6 +70,10 @@ export type LeadCreateInput = {
   utm_medium?: string | null;
   utm_campaign?: string | null;
   utm_content?: string | null;
+  respuesta_facturacion?: string | null;
+  respuesta_colaboradores?: string | null;
+  respuesta_objetivo?: string | null;
+  respuesta_cuando_empezar?: string | null;
 };
 
 export type LeadUpdateInput = {
@@ -312,6 +322,10 @@ export async function upsertLeadFromCalendly(input: {
   utm_medium?: string | null;
   utm_campaign?: string | null;
   utm_content?: string | null;
+  respuesta_facturacion?: string | null;
+  respuesta_colaboradores?: string | null;
+  respuesta_objetivo?: string | null;
+  respuesta_cuando_empezar?: string | null;
 }): Promise<{ created: boolean; lead: Lead }> {
   if (!input.email || !input.email.includes('@')) {
     throw new Error('Email inválido en payload de Calendly');
@@ -341,15 +355,21 @@ export async function upsertLeadFromCalendly(input: {
   };
 
   if (existing) {
-    // UTMs: solo incluir en el update si VIENEN con valor. Si no vienen, no
-    // los tocamos — preservamos el UTM original que ya tenía el lead.
-    const utmUpdates: Record<string, string> = {};
-    if (input.utm_source)   utmUpdates.utm_source   = input.utm_source;
-    if (input.utm_medium)   utmUpdates.utm_medium   = input.utm_medium;
-    if (input.utm_campaign) utmUpdates.utm_campaign = input.utm_campaign;
-    if (input.utm_content)  utmUpdates.utm_content  = input.utm_content;
+    // UTMs y respuestas: solo incluir en el update si VIENEN con valor. Si
+    // no vienen, no los tocamos — preservamos los datos originales (la
+    // primera respuesta es la más confiable; un re-agendamiento podría no
+    // re-enviar las respuestas).
+    const extraUpdates: Record<string, string> = {};
+    if (input.utm_source)              extraUpdates.utm_source              = input.utm_source;
+    if (input.utm_medium)              extraUpdates.utm_medium              = input.utm_medium;
+    if (input.utm_campaign)            extraUpdates.utm_campaign            = input.utm_campaign;
+    if (input.utm_content)             extraUpdates.utm_content             = input.utm_content;
+    if (input.respuesta_facturacion)   extraUpdates.respuesta_facturacion   = input.respuesta_facturacion;
+    if (input.respuesta_colaboradores) extraUpdates.respuesta_colaboradores = input.respuesta_colaboradores;
+    if (input.respuesta_objetivo)      extraUpdates.respuesta_objetivo      = input.respuesta_objetivo;
+    if (input.respuesta_cuando_empezar) extraUpdates.respuesta_cuando_empezar = input.respuesta_cuando_empezar;
 
-    const updatePayload = { ...basePayload, ...utmUpdates };
+    const updatePayload = { ...basePayload, ...extraUpdates };
 
     const { data, error } = await supabase
       .from('leads')
@@ -361,13 +381,17 @@ export async function upsertLeadFromCalendly(input: {
     return { created: false, lead: data as Lead };
   }
 
-  // INSERT: incluimos UTMs aunque sean null (lead nuevo, no hay nada que pisar)
+  // INSERT: incluimos todo aunque sean null (lead nuevo, no hay nada que pisar)
   const insertPayload = {
     ...basePayload,
-    utm_source:   input.utm_source   ?? null,
-    utm_medium:   input.utm_medium   ?? null,
-    utm_campaign: input.utm_campaign ?? null,
-    utm_content:  input.utm_content  ?? null,
+    utm_source:               input.utm_source               ?? null,
+    utm_medium:               input.utm_medium               ?? null,
+    utm_campaign:             input.utm_campaign             ?? null,
+    utm_content:              input.utm_content              ?? null,
+    respuesta_facturacion:    input.respuesta_facturacion    ?? null,
+    respuesta_colaboradores:  input.respuesta_colaboradores  ?? null,
+    respuesta_objetivo:       input.respuesta_objetivo       ?? null,
+    respuesta_cuando_empezar: input.respuesta_cuando_empezar ?? null,
   };
 
   const { data, error } = await supabase
