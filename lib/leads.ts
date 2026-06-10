@@ -55,6 +55,15 @@ export type Lead = {
   respuesta_objetivo: string | null;
   respuesta_cuando_empezar: string | null;
 
+  // Meta Lead Ads (instant form) — atribución del anuncio de origen
+  meta_lead_id: string | null;
+  meta_ad_id: string | null;
+  meta_ad_name: string | null;
+  meta_campaign_name: string | null;
+  meta_adset_name: string | null;
+  origen_lead: string | null;            // 'instant_form' | 'calendly' | null
+  telefono_normalizado: string | null;   // solo dígitos — llave de match
+
   created_at: string;
   updated_at: string;
 };
@@ -74,6 +83,13 @@ export type LeadCreateInput = {
   respuesta_colaboradores?: string | null;
   respuesta_objetivo?: string | null;
   respuesta_cuando_empezar?: string | null;
+  meta_lead_id?: string | null;
+  meta_ad_id?: string | null;
+  meta_ad_name?: string | null;
+  meta_campaign_name?: string | null;
+  meta_adset_name?: string | null;
+  origen_lead?: string | null;
+  telefono_normalizado?: string | null;
 };
 
 export type LeadUpdateInput = {
@@ -299,15 +315,154 @@ export async function deleteLead(id: number): Promise<void> {
 }
 
 /**
- * Upsert por email — usado por el webhook de Calendly.
+ * Normaliza un teléfono a solo dígitos (sin +, espacios, guiones, paréntesis).
+ * Llave de match entre instant form (Meta) y Calendly.
+ * @returns null si no quedan dígitos.
+ */
+export function normalizarTelefono(tel: string | null | undefined): string | null {
+  if (!tel) return null;
+  const digits = tel.replace(/\D/g, '');
+  return digits || null;
+}
+
+/**
+ * Upsert desde Meta Lead Ads (instant form) — hermana de upsertLeadFromCalendly.
  *
- * - Si existe lead con ese email: actualiza SOLO los campos que vienen de
- *   Calendly (nombre, email, fechas, empresa, telefono, utm_*). NUNCA toca
- *   los campos manuales (asistio_j1, calificado, cerro, monto, fecha_cierre).
- * - Para UTMs en UPDATE: solo sobrescribe si viene con valor. Si el lead ya
- *   tenía un UTM y re-agenda sin UTMs, NO se borra el existente (no podemos
- *   perder la atribución original).
- * - Si no existe: crea uno nuevo con los datos de Calendly.
+ * Match por teléfono O email: una persona puede usar un email en el instant
+ * form y otro al agendar en Calendly. El teléfono del instant form está
+ * verificado por SMS — es la llave más confiable.
+ *
+ * Reglas:
+ * - Idempotente por meta_lead_id: si ya existe un lead con ese leadgen_id,
+ *   es un reintento del webhook → retorna el existente sin tocar nada.
+ * - Si matchea lead existente (tel O email): actualiza SOLO campos de Meta +
+ *   origen_lead. Completa nombre/telefono/empresa solo si estaban vacíos.
+ *   NUNCA toca campos manuales (asistio_j1, calificado, cerro, montos, cobranza).
+ * - Si no existe: crea con origen_lead='instant_form'. fecha_agenda y
+ *   fecha_junta_1 quedan NULL — las completa Calendly cuando agende.
+ */
+export async function upsertLeadFromMeta(input: {
+  email: string | null;
+  nombre: string;
+  telefono?: string | null;
+  empresa?: string | null;
+  meta_lead_id: string;
+  meta_ad_id?: string | null;
+  meta_ad_name?: string | null;
+  meta_campaign_name?: string | null;
+  meta_adset_name?: string | null;
+}): Promise<{ created: boolean; lead: Lead }> {
+  if (!input.meta_lead_id) {
+    throw new Error('meta_lead_id es requerido');
+  }
+  if (!input.nombre || !input.nombre.trim()) {
+    throw new Error('Nombre es requerido en lead de Meta');
+  }
+
+  const supabase = getSupabaseServer();
+
+  // 1) Idempotencia: ¿ya procesamos este leadgen_id? (reintento de Meta)
+  const { data: porLeadId, error: leadIdErr } = await supabase
+    .from('leads')
+    .select('*')
+    .eq('meta_lead_id', input.meta_lead_id)
+    .maybeSingle();
+  if (leadIdErr) throw new Error(`Error buscando por meta_lead_id: ${leadIdErr.message}`);
+  if (porLeadId) {
+    return { created: false, lead: porLeadId as Lead };
+  }
+
+  // 2) Normalizar señales de identidad
+  const emailNorm = input.email?.trim().toLowerCase() || null;
+  const telNorm = normalizarTelefono(input.telefono);
+
+  // 3) Buscar existente por teléfono O email
+  let existing: Lead | null = null;
+  if (telNorm) {
+    const { data, error } = await supabase
+      .from('leads')
+      .select('*')
+      .eq('telefono_normalizado', telNorm)
+      .maybeSingle();
+    if (error) throw new Error(`Error buscando por teléfono: ${error.message}`);
+    existing = (data as Lead | null) ?? null;
+  }
+  if (!existing && emailNorm) {
+    const { data, error } = await supabase
+      .from('leads')
+      .select('*')
+      .ilike('email', emailNorm)
+      .maybeSingle();
+    if (error) throw new Error(`Error buscando por email: ${error.message}`);
+    existing = (data as Lead | null) ?? null;
+  }
+
+  // Campos de Meta — siempre se escriben (es info nueva de atribución)
+  const metaFields = {
+    meta_lead_id: input.meta_lead_id,
+    meta_ad_id: input.meta_ad_id ?? null,
+    meta_ad_name: input.meta_ad_name ?? null,
+    meta_campaign_name: input.meta_campaign_name ?? null,
+    meta_adset_name: input.meta_adset_name ?? null,
+    origen_lead: 'instant_form',
+  };
+
+  if (existing) {
+    // Completar contacto solo si estaba vacío — no pisar datos existentes
+    const fillIfEmpty: Record<string, string> = {};
+    if (!existing.nombre?.trim() && input.nombre.trim()) {
+      fillIfEmpty.nombre = input.nombre.trim();
+    }
+    if (!existing.email && emailNorm) fillIfEmpty.email = emailNorm;
+    if (!existing.telefono && input.telefono?.trim()) {
+      fillIfEmpty.telefono = input.telefono.trim();
+    }
+    if (!existing.empresa && input.empresa?.trim()) {
+      fillIfEmpty.empresa = input.empresa.trim();
+    }
+    if (!existing.telefono_normalizado && telNorm) {
+      fillIfEmpty.telefono_normalizado = telNorm;
+    }
+
+    const { data, error } = await supabase
+      .from('leads')
+      .update({ ...metaFields, ...fillIfEmpty })
+      .eq('id', existing.id)
+      .select('*')
+      .single();
+    if (error) throw new Error(`Error actualizando lead ${existing.id} desde Meta: ${error.message}`);
+    return { created: false, lead: data as Lead };
+  }
+
+  // INSERT nuevo — fechas de agenda/J1 NULL (las pone Calendly al agendar)
+  const { data, error } = await supabase
+    .from('leads')
+    .insert({
+      nombre: input.nombre.trim(),
+      email: emailNorm,
+      telefono: input.telefono?.trim() || null,
+      empresa: input.empresa?.trim() || null,
+      telefono_normalizado: telNorm,
+      ...metaFields,
+    })
+    .select('*')
+    .single();
+  if (error) throw new Error(`Error creando lead desde Meta: ${error.message}`);
+  return { created: true, lead: data as Lead };
+}
+
+/**
+ * Upsert por teléfono O email — usado por el webhook de Calendly.
+ *
+ * - Match (4B-bis): busca primero por telefono_normalizado, después por
+ *   email. Así un lead que entró por instant form (teléfono verificado por
+ *   SMS) se completa con su fecha de J1 cuando agenda en Calendly, aunque
+ *   use un email distinto.
+ * - Si existe: actualiza SOLO los campos que vienen de Calendly (nombre,
+ *   email, fechas, empresa, telefono). NUNCA toca los campos manuales
+ *   (asistio_j1, calificado, cerro, monto, fecha_cierre) ni los meta_*.
+ * - UTMs y respuestas en UPDATE: solo sobrescribe si viene con valor.
+ * - Si no existe: crea uno nuevo con origen_lead='calendly'.
  *
  * @returns { created: true } si fue insert, { created: false } si fue update.
  */
@@ -331,17 +486,31 @@ export async function upsertLeadFromCalendly(input: {
     throw new Error('Email inválido en payload de Calendly');
   }
   const emailNorm = input.email.trim().toLowerCase();
+  const telNorm = normalizarTelefono(input.telefono);
 
   const supabase = getSupabaseServer();
 
-  // Buscar existente por email (case-insensitive vía toLowerCase normalizado)
-  const { data: existing, error: findErr } = await supabase
-    .from('leads')
-    .select('*')
-    .ilike('email', emailNorm)
-    .maybeSingle();
-
-  if (findErr) throw new Error(`Error buscando lead por email: ${findErr.message}`);
+  // Match 4B-bis: primero por teléfono normalizado (la señal más confiable
+  // — la comparte con el instant form de Meta), después por email.
+  let existing: Lead | null = null;
+  if (telNorm) {
+    const { data, error } = await supabase
+      .from('leads')
+      .select('*')
+      .eq('telefono_normalizado', telNorm)
+      .maybeSingle();
+    if (error) throw new Error(`Error buscando lead por teléfono: ${error.message}`);
+    existing = (data as Lead | null) ?? null;
+  }
+  if (!existing) {
+    const { data, error } = await supabase
+      .from('leads')
+      .select('*')
+      .ilike('email', emailNorm)
+      .maybeSingle();
+    if (error) throw new Error(`Error buscando lead por email: ${error.message}`);
+    existing = (data as Lead | null) ?? null;
+  }
 
   // Base de payload — campos que SIEMPRE se actualizan en update (no rompen
   // atribución existente porque son datos de contacto / agenda).
@@ -352,6 +521,7 @@ export async function upsertLeadFromCalendly(input: {
     fecha_junta_1: input.fecha_junta_1,
     empresa: input.empresa?.trim() || null,
     telefono: input.telefono?.trim() || null,
+    ...(telNorm ? { telefono_normalizado: telNorm } : {}),
   };
 
   if (existing) {
@@ -384,6 +554,7 @@ export async function upsertLeadFromCalendly(input: {
   // INSERT: incluimos todo aunque sean null (lead nuevo, no hay nada que pisar)
   const insertPayload = {
     ...basePayload,
+    origen_lead:              'calendly',
     utm_source:               input.utm_source               ?? null,
     utm_medium:               input.utm_medium               ?? null,
     utm_campaign:             input.utm_campaign             ?? null,
