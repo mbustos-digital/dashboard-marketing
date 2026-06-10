@@ -114,6 +114,7 @@ export default async function LeadsPage() {
               >
                 <th className="px-4 py-3">Nombre</th>
                 <th className="px-4 py-3 hidden md:table-cell">Empresa</th>
+                <th className="px-4 py-3 hidden md:table-cell">Origen</th>
                 <th className="px-4 py-3">Fecha J1</th>
                 <th className="px-4 py-3">Cohorte</th>
                 <th className="px-4 py-3 text-right">Cierre</th>
@@ -149,6 +150,13 @@ export default async function LeadsPage() {
                       style={{ color: 'var(--text-dim)' }}
                     >
                       {lead.empresa ?? '—'}
+                    </td>
+                    <td
+                      className="px-4 py-3 hidden md:table-cell text-sm max-w-[180px] truncate"
+                      style={{ color: 'var(--text-dim)' }}
+                      title={lead.meta_campaign_name ?? lead.utm_campaign ?? undefined}
+                    >
+                      {lead.meta_campaign_name ?? lead.utm_campaign ?? '—'}
                     </td>
                     <td className="px-4 py-3">
                       {fmtFechaCorta(lead.fecha_junta_1)}
