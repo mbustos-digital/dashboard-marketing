@@ -760,3 +760,261 @@ export async function listCACMensual(limit = 12): Promise<CACMensualEntry[]> {
   return entries.slice(-limit);
 }
 
+
+// =============================================================================
+// FASE 8 — queries para el rediseño visual
+// =============================================================================
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Funnel de 6 etapas (Prompt 8B) — conversiones entre etapas en un rango
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type FunnelEtapa = {
+  key: string;
+  label: string;
+  entrada: number;
+  salida: number;
+  pct: number | null;          // salida/entrada * 100, null si entrada=0
+  benchmark: string;           // texto del tooltip de info
+  salud: 'verde' | 'ambar' | 'rojo' | 'sin_datos';
+};
+
+export type FunnelMes = {
+  etapas: FunnelEtapa[];
+  cuelloKey: string | null;    // etapa con peor conversión (entre las que tienen datos)
+};
+
+export async function getFunnelEtapas(start: string, end: string): Promise<FunnelMes> {
+  const supabase = getSupabaseServer();
+
+  const [mkt, leadsRes] = await Promise.all([
+    getMarketingWindow(start, end),
+    supabase
+      .from('leads')
+      .select('asistio_j1, calificado, cerro, fecha_junta_1')
+      .gte('fecha_junta_1', start)
+      .lte('fecha_junta_1', end),
+  ]);
+
+  if (leadsRes.error) throw new Error(`Funnel leads falló: ${leadsRes.error.message}`);
+  const rows = leadsRes.data ?? [];
+
+  const total_j1 = rows.length;
+  const asistencias = rows.filter((r) => r.asistio_j1 === true).length;
+  const limpias = rows.filter((r) => r.asistio_j1 === true && r.calificado === true).length;
+  const cierres = rows.filter((r) => r.cerro === true).length;
+
+  const pctDe = (salida: number, entrada: number): number | null =>
+    entrada > 0 ? (salida / entrada) * 100 : null;
+
+  // Umbrales de salud por etapa (benchmarks del mentor + sentido común)
+  const saludDe = (key: string, pct: number | null): FunnelEtapa['salud'] => {
+    if (pct === null) return 'sin_datos';
+    switch (key) {
+      case 'imp_landing':   // CTR-like: 0.9-1.5% promedio FB
+        return pct < 0.5 ? 'rojo' : pct < 0.9 ? 'ambar' : 'verde';
+      case 'landing_vsl':   // <20% flojo
+        return pct < 20 ? 'rojo' : pct < 35 ? 'ambar' : 'verde';
+      case 'vsl_agenda':
+        return pct < 1 ? 'rojo' : pct < 3 ? 'ambar' : 'verde';
+      case 'agenda_asistio': // no-show >35% es problema → asistencia <65% rojo
+        return pct < 65 ? 'rojo' : pct < 75 ? 'ambar' : 'verde';
+      case 'asistio_calificado':
+        return pct < 40 ? 'rojo' : pct < 60 ? 'ambar' : 'verde';
+      case 'calificado_cierre': // ratio joya: <20 problema, 20-30 mixto, ≥30 sano
+        return pct < 20 ? 'rojo' : pct < 30 ? 'ambar' : 'verde';
+      default:
+        return 'ambar';
+    }
+  };
+
+  const defs: Array<Omit<FunnelEtapa, 'pct' | 'salud'>> = [
+    {
+      key: 'imp_landing',
+      label: 'Impresión → Landing',
+      entrada: mkt.impressions,
+      salida: mkt.landing_page_views,
+      benchmark: 'CTR promedio de Facebook 0.9–1.5%. <0.5% malo, >1.5% fuerte.',
+    },
+    {
+      key: 'landing_vsl',
+      label: 'Landing → VSL',
+      entrada: mkt.landing_page_views,
+      salida: mkt.vsl_views ?? 0,
+      benchmark: 'Referencia interna: <20% es flojo. Comparalo contra tu propio número mes a mes.',
+    },
+    {
+      key: 'vsl_agenda',
+      label: 'VSL → Agenda',
+      entrada: mkt.vsl_views ?? 0,
+      salida: mkt.agendamientos,
+      benchmark: 'Referencia interna: compará mes a mes. Subirlo = mejor oferta/CTA del VSL.',
+    },
+    {
+      key: 'agenda_asistio',
+      label: 'Agenda → Asistió J1',
+      entrada: total_j1,
+      salida: asistencias,
+      benchmark: 'No-show >35% (asistencia <65%) sugiere problema de recordatorios o calificación previa.',
+    },
+    {
+      key: 'asistio_calificado',
+      label: 'Asistió → Calificado',
+      entrada: asistencias,
+      salida: limpias,
+      benchmark: 'Mide la calidad del lead que llega a J1. Bajo = atraes al perfil equivocado.',
+    },
+    {
+      key: 'calificado_cierre',
+      label: 'Calificado → Cierre',
+      entrada: limpias,
+      salida: cierres,
+      benchmark: 'Ratio joya. ≥30% sano, 20-30% mixto, <20% problema de venta (J2, oferta, objeciones).',
+    },
+  ];
+
+  const etapas: FunnelEtapa[] = defs.map((d) => {
+    const pct = pctDe(d.salida, d.entrada);
+    return { ...d, pct, salud: saludDe(d.key, pct) };
+  });
+
+  // Cuello de botella: peor % normalizado contra su umbral "verde".
+  // Simplificación honesta: la etapa con salud 'rojo' de menor pct; si no hay
+  // rojas, la 'ambar' de menor pct. Si todo verde o sin datos → null.
+  const rojas = etapas.filter((e) => e.salud === 'rojo');
+  const ambars = etapas.filter((e) => e.salud === 'ambar');
+  const pool = rojas.length > 0 ? rojas : ambars;
+  const cuello = pool.length > 0
+    ? pool.reduce((min, e) => ((e.pct ?? 0) < (min.pct ?? 0) ? e : min))
+    : null;
+
+  return { etapas, cuelloKey: cuello?.key ?? null };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Anuncios ganadores (Prompt 8B) — leads agrupados por meta_ad_name
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type AnuncioGanador = {
+  ad_name: string;
+  leads: number;
+  agendas: number;
+  cierres: number;
+  cash_usd: number;
+};
+
+export async function listAnunciosGanadores(): Promise<AnuncioGanador[]> {
+  const supabase = getSupabaseServer();
+  const { data, error } = await supabase
+    .from('leads')
+    .select('meta_ad_name, fecha_agenda, cerro, total_cobrado_usd')
+    .not('meta_ad_name', 'is', null);
+
+  if (error) throw new Error(`Anuncios ganadores falló: ${error.message}`);
+
+  const porAd = new Map<string, AnuncioGanador>();
+  for (const r of data ?? []) {
+    const name = r.meta_ad_name as string;
+    const acc = porAd.get(name) ?? { ad_name: name, leads: 0, agendas: 0, cierres: 0, cash_usd: 0 };
+    acc.leads += 1;
+    if (r.fecha_agenda) acc.agendas += 1;
+    if (r.cerro === true) acc.cierres += 1;
+    acc.cash_usd += Number(r.total_cobrado_usd ?? 0);
+    porAd.set(name, acc);
+  }
+
+  return [...porAd.values()].sort((a, b) => b.agendas - a.agendas || b.leads - a.leads);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tramos del ciclo de venta (Prompt 8C) — línea de tiempo promedio
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type TramoSCL = {
+  label: string;
+  dias_promedio: number | null;  // null si <1 lead con ambas fechas
+  n: number;                     // leads con ambas fechas del tramo
+};
+
+export type TramosSCL = {
+  tramos: TramoSCL[];
+  tramo_mas_lento: string | null;
+};
+
+export async function getTramosSCL(): Promise<TramosSCL> {
+  const supabase = getSupabaseServer();
+  const { data, error } = await supabase
+    .from('leads')
+    .select('fecha_agenda, fecha_junta_1, fecha_junta_2, fecha_confirmacion, fecha_primer_pago');
+  if (error) throw new Error(`Tramos SCL falló: ${error.message}`);
+
+  const dias = (a: string | null, b: string | null): number | null => {
+    if (!a || !b) return null;
+    const [ay, am, ad] = a.split('-').map(Number);
+    const [by, bm, bd] = b.split('-').map(Number);
+    const d = Math.floor((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000);
+    return d >= 0 ? d : null;
+  };
+
+  const defs: Array<{ label: string; from: string; to: string }> = [
+    { label: 'Agenda → Junta 1', from: 'fecha_agenda', to: 'fecha_junta_1' },
+    { label: 'Junta 1 → Junta 2', from: 'fecha_junta_1', to: 'fecha_junta_2' },
+    { label: 'Junta 2 → Confirmó', from: 'fecha_junta_2', to: 'fecha_confirmacion' },
+    { label: 'Confirmó → Primer pago', from: 'fecha_confirmacion', to: 'fecha_primer_pago' },
+  ];
+
+  type Row = Record<string, string | null>;
+  const rows = (data ?? []) as Row[];
+
+  const tramos: TramoSCL[] = defs.map((def) => {
+    const vals: number[] = [];
+    for (const r of rows) {
+      const d = dias(r[def.from], r[def.to]);
+      if (d !== null) vals.push(d);
+    }
+    return {
+      label: def.label,
+      n: vals.length,
+      dias_promedio: vals.length > 0 ? vals.reduce((s, v) => s + v, 0) / vals.length : null,
+    };
+  });
+
+  const conDatos = tramos.filter((t) => t.dias_promedio !== null);
+  const tramo_mas_lento = conDatos.length > 0
+    ? conDatos.reduce((max, t) => ((t.dias_promedio ?? 0) > (max.dias_promedio ?? 0) ? t : max)).label
+    : null;
+
+  return { tramos, tramo_mas_lento };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Resumen comparativo mes actual vs anterior (Prompt 8A) — 4 números + tendencia
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type ResumenComparativo = {
+  inversion_usd: { actual: number; anterior: number };
+  agendas: { actual: number; anterior: number };
+  cash_usd: { actual: number; anterior: number };
+  cierres: { actual: number; anterior: number };
+};
+
+export async function getResumenComparativo(
+  mesActualInicio: string,
+  hoy: string,
+  mesAnteriorInicio: string,
+  mesAnteriorFin: string,
+): Promise<ResumenComparativo> {
+  const [mktAct, mktAnt, revAct, revAnt] = await Promise.all([
+    getMarketingWindow(mesActualInicio, hoy),
+    getMarketingWindow(mesAnteriorInicio, mesAnteriorFin),
+    getRevenuePeriod(mesActualInicio, hoy),
+    getRevenuePeriod(mesAnteriorInicio, mesAnteriorFin),
+  ]);
+
+  return {
+    inversion_usd: { actual: mktAct.spend_usd, anterior: mktAnt.spend_usd },
+    agendas: { actual: mktAct.agendamientos, anterior: mktAnt.agendamientos },
+    cash_usd: { actual: revAct.cash_collected_usd, anterior: revAnt.cash_collected_usd },
+    cierres: { actual: revAct.cierres_en_periodo, anterior: revAnt.cierres_en_periodo },
+  };
+}

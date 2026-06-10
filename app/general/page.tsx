@@ -1,26 +1,28 @@
 // =============================================================================
-// Tab Vista General — KPIs Marketing + Comercial + diagnóstico cruzado
+// Tab Vista General — panel de salud tipo semáforo (Fase 8A + 8E)
 // =============================================================================
-// 4 KPIs Marketing (mes actual) + 4 KPIs Comercial (cohortes maduras) +
-// mensaje de diagnóstico que ubica el cuello del funnel.
+// En vez de repetir métricas de otros tabs:
+//   a) Veredicto arriba (verde/ámbar/rojo) según el peor problema activo
+//   b) Alertas ordenadas por urgencia — CONCLUSIÓN + qué revisar + atajo al tab
+//   c) Estado del pipeline (distribución por madurez)
+//   d) Resumen del mes: 4 números con tendencia vs mes anterior
 // =============================================================================
 
+import Link from 'next/link';
 import {
-  getMarketingWindow,
+  getFunnelEtapas,
   getResumenComercialMaduras,
   getDistribucionPipeline,
-  type MarketingWindow,
+  getRevenuePeriod,
+  getResumenComparativo,
   type ResumenComercialMaduras,
   type DistribucionPipeline,
+  type FunnelMes,
+  type ResumenComparativo,
 } from '@/lib/queries';
-import {
-  ayerEnTijuana,
-  esFechaValida,
-  primerDiaDelMesDeFecha,
-} from '@/lib/date-utils';
+import { ayerEnTijuana, primerDiaDelMesDeFecha, diasAntes } from '@/lib/date-utils';
 import { DashboardHeader } from '../_components/DashboardHeader';
 import { DashboardTabs } from '../_components/DashboardTabs';
-import { FechaSelector } from '../_components/FechaSelector';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -28,11 +30,6 @@ export const revalidate = 0;
 // ─────────────────────────────────────────────────────────────────────────────
 // Format helpers
 // ─────────────────────────────────────────────────────────────────────────────
-
-function fmtNumber(n: number | null | undefined): string {
-  if (n === null || n === undefined || !Number.isFinite(n)) return '—';
-  return new Intl.NumberFormat('es-MX').format(Math.round(n));
-}
 
 function fmtUSD(n: number | null | undefined): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return '—';
@@ -43,142 +40,154 @@ function fmtUSD(n: number | null | undefined): string {
   }).format(n);
 }
 
-function fmtPercent(n: number | null | undefined): string {
+function fmtNumber(n: number | null | undefined): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return '—';
-  return `${n.toFixed(0)}%`;
+  return new Intl.NumberFormat('es-MX').format(Math.round(n));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Diagnóstico cruzado — define dónde está el cuello del funnel
+// Motor de alertas (8E) — conclusiones accionables, no datos crudos
 // ─────────────────────────────────────────────────────────────────────────────
 
-type DiagnosticoCuello = {
-  mensaje: string;
-  color: string;
-  emoji: string;
+type Nivel = 'rojo' | 'ambar' | 'verde';
+
+type Alerta = {
+  nivel: Nivel;
+  titulo: string;
+  detalle: string;
+  href: string;
+  hrefLabel: string;
 };
 
-function diagnosticarCuello(
-  mes: MarketingWindow,
+function construirAlertas(
+  funnel: FunnelMes,
   maduras: ResumenComercialMaduras,
-): DiagnosticoCuello {
-  const tasa = maduras.tasa_cierre_madura;
+  pipeline: DistribucionPipeline,
+  outstanding: number,
+): Alerta[] {
+  const alertas: Alerta[] = [];
 
-  // Sin data de cohortes maduras aún
-  if (tasa === null) {
-    return {
-      mensaje:
-        'Aún no hay cohortes maduras (≥14d post-J1) para juzgar el sistema de venta. Sigue capturando leads y vuelve cuando tengas al menos una cohorte madura.',
-      color: 'var(--text-dim)',
-      emoji: '⚪',
-    };
-  }
-
-  // Identificar peor ratio del funnel marketing (mes)
-  const ratios: Array<{ label: string; valor: number }> = [];
-  if (mes.ratio_imp_landing !== null) {
-    ratios.push({ label: 'Impresiones → Landing', valor: mes.ratio_imp_landing });
-  }
-  if (mes.ratio_landing_vsl !== null) {
-    ratios.push({ label: 'Landing → VSL', valor: mes.ratio_landing_vsl });
-  }
-  const peorRatio =
-    ratios.length > 0
-      ? ratios.reduce((max, r) => (r.valor > max.valor ? r : max))
-      : null;
-
-  // Lógica del brief original
-  if (tasa >= 30) {
-    return {
-      mensaje:
-        `Tu sistema de venta está SALUDABLE (${tasa.toFixed(0)}% de cierre sobre limpias en cohortes maduras). ` +
-        (peorRatio
-          ? `El cuello está en MARKETING — específicamente en el ratio "${peorRatio.label}" (1 de cada ${Math.round(peorRatio.valor)}). ` +
-            `Si subes ese ratio, escalas cierres sin tocar tu cierre. Foco: traer más leads o mejor calidad de lead.`
-          : 'Cuando tengas más data de marketing del mes, te marco el peor ratio para enfocar ahí.'),
-      color: 'var(--accent-green)',
-      emoji: '🟢',
-    };
-  }
-
-  if (tasa < 20) {
-    return {
-      mensaje:
-        `Tu sistema de venta tiene PROBLEMA (${tasa.toFixed(0)}% de cierre — bajo umbral 20%). ` +
-        `Hay leads pero no cierras. El cuello está en VENTAS — revisa: calidad del lead que pasa a calificado, ` +
-        `proceso comercial, propuesta, follow-up post-J1.`,
-      color: 'var(--accent-orange)',
-      emoji: '🔴',
-    };
-  }
-
-  // Zona intermedia 20-30%
-  return {
-    mensaje:
-      `Cuello MIXTO (${tasa.toFixed(0)}% de cierre, zona intermedia). ` +
-      (peorRatio
-        ? `Atiende el peor ratio del momento ("${peorRatio.label}" = 1 de cada ${Math.round(peorRatio.valor)}) ` +
-          `y al mismo tiempo afina tu proceso comercial post-J1. Ambos lados tienen margen.`
-        : 'Optimiza marketing y proceso comercial en paralelo.'),
-    color: 'var(--accent-yellow)',
-    emoji: '🟡',
+  // ── Etapas de MARKETING del mes (8E: diagnóstico por etapa) ──
+  const diagnosticos: Record<string, string> = {
+    imp_landing:
+      'Pocos clicks en el anuncio. Revisá el creativo y la segmentación.',
+    landing_vsl:
+      'Entran a la landing pero no ven el VSL. Revisá: ¿el video se ve al entrar sin scrollear? ¿la página carga rápido? ¿el anuncio promete lo mismo que muestra la landing?',
+    vsl_agenda:
+      'Ven el VSL pero no agendan. Revisá el CTA del video y la fricción del calendario.',
   };
+
+  for (const etapa of funnel.etapas) {
+    if (!(etapa.key in diagnosticos)) continue; // comerciales se evalúan con maduras
+    if (etapa.salud !== 'rojo' && etapa.salud !== 'ambar') continue;
+    const esCuello = funnel.cuelloKey === etapa.key;
+    alertas.push({
+      nivel: esCuello ? 'rojo' : etapa.salud === 'rojo' ? 'rojo' : 'ambar',
+      titulo: `${esCuello ? 'Cuello de botella: ' : ''}${etapa.label} en ${etapa.pct !== null ? etapa.pct.toFixed(1) + '%' : '—'}`,
+      detalle: diagnosticos[etapa.key],
+      href: '/',
+      hrefLabel: 'Ver Marketing',
+    });
+  }
+
+  // ── No-show en cohortes maduras ──
+  if (maduras.total_j1 > 0) {
+    const noShow = ((maduras.total_j1 - maduras.asistencias) / maduras.total_j1) * 100;
+    if (noShow > 35) {
+      alertas.push({
+        nivel: noShow > 50 ? 'rojo' : 'ambar',
+        titulo: `No-show de ${noShow.toFixed(0)}% en cohortes maduras`,
+        detalle:
+          'Muchos agendan y no llegan a J1. Revisá recordatorios automáticos (WhatsApp/email 24h y 1h antes) y la calificación previa del formulario.',
+        href: '/comercial',
+        hrefLabel: 'Ver Comercial',
+      });
+    }
+  }
+
+  // ── Tasa de cierre en maduras ──
+  if (maduras.tasa_cierre_madura !== null && maduras.limpias >= 3) {
+    if (maduras.tasa_cierre_madura >= 30) {
+      alertas.push({
+        nivel: 'verde',
+        titulo: `Tu venta funciona: ${maduras.tasa_cierre_madura.toFixed(0)}% de cierre sobre limpias`,
+        detalle:
+          'El sistema de venta está sano. Si querés más cierres, el foco es marketing: más volumen o mejor calidad de lead.',
+        href: '/comercial',
+        hrefLabel: 'Ver Comercial',
+      });
+    } else if (maduras.tasa_cierre_madura < 20) {
+      alertas.push({
+        nivel: 'rojo',
+        titulo: `Tasa de cierre baja: ${maduras.tasa_cierre_madura.toFixed(0)}% en cohortes maduras`,
+        detalle:
+          'Califican pero no cierran. Revisá la oferta y el manejo de objeciones en la J2 — y si el monto/forma de pago es el correcto para tu perfil de cliente.',
+        href: '/comercial',
+        hrefLabel: 'Ver Comercial',
+      });
+    }
+  }
+
+  // ── Cobranza pendiente ──
+  if (outstanding > 0) {
+    alertas.push({
+      nivel: 'ambar',
+      titulo: `Cobranza pendiente: ${fmtUSD(outstanding)}`,
+      detalle:
+        'Hay diferencia entre lo vendido y lo cobrado este mes. Revisá quién debe el siguiente pago y agendá el follow-up.',
+      href: '/revenue',
+      hrefLabel: 'Ver Revenue',
+    });
+  }
+
+  // ── Pipeline maduro ──
+  if (pipeline.total > 0 && pipeline.pct_madura > 60) {
+    alertas.push({
+      nivel: 'verde',
+      titulo: 'Pipeline mayormente maduro',
+      detalle: 'La tasa de cierre que ves ya es confiable como predictor del negocio.',
+      href: '/comercial',
+      hrefLabel: 'Ver Comercial',
+    });
+  }
+
+  // Orden: rojas → ámbar → verdes
+  const peso: Record<Nivel, number> = { rojo: 0, ambar: 1, verde: 2 };
+  alertas.sort((a, b) => peso[a.nivel] - peso[b.nivel]);
+  return alertas;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Page
 // ─────────────────────────────────────────────────────────────────────────────
 
-function fmtMesNombre(yyyy_mm_dd: string): string {
-  const [y, m] = yyyy_mm_dd.split('-').map(Number);
-  const fecha = new Date(Date.UTC(y, m - 1, 1));
-  return new Intl.DateTimeFormat('es-MX', {
-    month: 'long',
-    year: 'numeric',
-    timeZone: 'UTC',
-  }).format(fecha);
-}
-
-export default async function GeneralPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ desde?: string; hasta?: string }>;
-}) {
+export default async function GeneralPage() {
   const ayerReal = ayerEnTijuana();
-  const params = await searchParams;
-  const desdeParam = params.desde;
-  const hastaParam = params.hasta;
-  const filtroActivo =
-    !!desdeParam &&
-    !!hastaParam &&
-    esFechaValida(desdeParam) &&
-    esFechaValida(hastaParam) &&
-    desdeParam <= hastaParam &&
-    hastaParam <= ayerReal;
+  const mesInicio = primerDiaDelMesDeFecha(ayerReal);
+  // Mes anterior: del 1 del mes pasado al día antes del 1 de este mes
+  const mesAnteriorFin = diasAntes(mesInicio, 1);
+  const mesAnteriorInicio = primerDiaDelMesDeFecha(mesAnteriorFin);
 
-  // Rango efectivo para marketing:
-  //   - Filtro activo: rango elegido por el usuario
-  //   - Sin filtro: mes en curso
-  const rangoDesde = filtroActivo ? desdeParam! : primerDiaDelMesDeFecha(ayerReal);
-  const rangoHasta = filtroActivo ? hastaParam! : ayerReal;
-  const tituloSeccion = filtroActivo
-    ? `Marketing — ${rangoDesde} → ${rangoHasta}`
-    : `Marketing — ${fmtMesNombre(ayerReal)}`;
-  const subtituloSeccion = filtroActivo
-    ? `Datos del rango filtrado`
-    : `Datos automáticos de Meta + YouTube, mes en curso`;
-
-  let mes: MarketingWindow | null = null;
+  let funnel: FunnelMes | null = null;
   let maduras: ResumenComercialMaduras | null = null;
   let pipeline: DistribucionPipeline | null = null;
+  let outstanding = 0;
+  let comparativo: ResumenComparativo | null = null;
   let errorMsg: string | null = null;
 
   try {
-    [mes, maduras, pipeline] = await Promise.all([
-      getMarketingWindow(rangoDesde, rangoHasta),
+    const [f, m, p, rev, comp] = await Promise.all([
+      getFunnelEtapas(mesInicio, ayerReal),
       getResumenComercialMaduras(),
       getDistribucionPipeline(),
+      getRevenuePeriod(mesInicio, ayerReal),
+      getResumenComparativo(mesInicio, ayerReal, mesAnteriorInicio, mesAnteriorFin),
     ]);
+    funnel = f;
+    maduras = m;
+    pipeline = p;
+    outstanding = rev.outstanding_usd;
+    comparativo = comp;
   } catch (err) {
     errorMsg = err instanceof Error ? err.message : String(err);
   }
@@ -188,14 +197,12 @@ export default async function GeneralPage({
       <DashboardHeader fechaAyer={ayerReal} />
       <DashboardTabs active="general" />
 
-      <FechaSelector fechaActualReal={ayerReal} />
-
-      {errorMsg || !mes || !maduras ? (
+      {errorMsg || !funnel || !maduras || !pipeline || !comparativo ? (
         <div
           className="rounded-lg p-6 border"
           style={{ borderColor: 'var(--accent-orange)', background: '#2a1410' }}
         >
-          <p className="font-semibold mb-1" style={{ color: 'var(--accent-orange)' }}>
+          <p className="text-lg font-semibold mb-1" style={{ color: 'var(--accent-orange)' }}>
             Error consultando datos
           </p>
           <p className="text-base font-mono" style={{ color: 'var(--text-dim)' }}>
@@ -203,145 +210,155 @@ export default async function GeneralPage({
           </p>
         </div>
       ) : (
-        <div className="space-y-8">
-          {/* DIAGNÓSTICO CRUZADO */}
-          <DiagnosticoCard data={diagnosticarCuello(mes, maduras)} />
-
-          {/* ESTADO DEL PIPELINE */}
-          {pipeline && <PipelineCard data={pipeline} />}
-
-          {/* KPIs Marketing del mes */}
-          <Section
-            title={tituloSeccion}
-            subtitle={subtituloSeccion}
-          >
-            <Grid>
-              <KPI
-                label="Impresiones"
-                value={fmtNumber(mes.impressions)}
-                accent="yellow"
-              />
-              <KPI
-                label="Visitas Landing"
-                value={fmtNumber(mes.landing_page_views)}
-                accent="yellow"
-              />
-              <KPI
-                label="Vistas VSL"
-                value={fmtNumber(mes.vsl_views)}
-                accent="yellow"
-                hint={mes.vsl_views === null ? 'Aún sin baseline' : undefined}
-              />
-              <KPI
-                label="Inversión total"
-                value={fmtUSD(mes.spend_usd)}
-                accent="yellow"
-              />
-            </Grid>
-          </Section>
-
-          {/* KPIs Comercial - cohortes maduras */}
-          <Section
-            title="Comercial — cohortes maduras"
-            subtitle={
-              maduras.cohortes_maduras_count === 0
-                ? 'Aún sin cohortes maduras. Datos llegan ≥14 días después de J1.'
-                : `Acumulado de ${maduras.cohortes_maduras_count} cohorte${maduras.cohortes_maduras_count === 1 ? '' : 's'} mensual${maduras.cohortes_maduras_count === 1 ? '' : 'es'} con J1 hace ≥14d (siempre vs hoy real, no afecta filtro de fecha)`
-            }
-          >
-            <Grid>
-              <KPI
-                label="Limpias acumuladas"
-                value={fmtNumber(maduras.limpias)}
-                accent="default"
-              />
-              <KPI
-                label="Cierres"
-                value={fmtNumber(maduras.cierres)}
-                accent="green"
-              />
-              <KPI
-                label="Tasa cierre (ratio joya)"
-                value={fmtPercent(maduras.tasa_cierre_madura)}
-                accent="green"
-                hint="Cierres ÷ Limpias"
-              />
-              <KPI
-                label="Ventas acumuladas"
-                value={fmtUSD(maduras.ingreso_total_usd)}
-                accent="green"
-              />
-            </Grid>
-            {maduras.dias_promedio_ciclo !== null && (
-              <p className="mt-4 text-base" style={{ color: 'var(--text-dim)' }}>
-                Ciclo promedio J1 → cierre:{' '}
-                <strong style={{ color: 'var(--text)' }}>
-                  {maduras.dias_promedio_ciclo.toFixed(1)} días
-                </strong>
-              </p>
-            )}
-          </Section>
-        </div>
+        <GeneralContent
+          alertas={construirAlertas(funnel, maduras, pipeline, outstanding)}
+          pipeline={pipeline}
+          comparativo={comparativo}
+        />
       )}
     </main>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Diagnóstico card — el mensaje grande arriba
+// Contenido (veredicto + alertas + pipeline + resumen)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function DiagnosticoCard({ data }: { data: DiagnosticoCuello }) {
+function GeneralContent({
+  alertas,
+  pipeline,
+  comparativo,
+}: {
+  alertas: Alerta[];
+  pipeline: DistribucionPipeline;
+  comparativo: ResumenComparativo;
+}) {
+  const urgentes = alertas.filter((a) => a.nivel === 'rojo').length;
+  const vigilar = alertas.filter((a) => a.nivel === 'ambar').length;
+  const enOrden = alertas.filter((a) => a.nivel === 'verde').length;
+
+  const veredicto =
+    urgentes > 0
+      ? { texto: 'Hay algo urgente que atender', color: 'var(--accent-orange)', emoji: '🔴' }
+      : vigilar > 0
+      ? { texto: 'En general bien — hay cosas que vigilar', color: 'var(--accent-yellow)', emoji: '🟡' }
+      : { texto: 'El negocio está sano', color: 'var(--accent-green)', emoji: '🟢' };
+
+  return (
+    <div className="space-y-8">
+      {/* VEREDICTO */}
+      <section
+        className="rounded-xl border p-6 md:p-8 flex flex-wrap items-center justify-between gap-4"
+        style={{ background: 'var(--card-bg)', borderColor: veredicto.color, borderWidth: 2 }}
+      >
+        <div className="flex items-center gap-4">
+          <span className="text-5xl leading-none">{veredicto.emoji}</span>
+          <h2
+            className="text-[34px] leading-tight"
+            style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500, color: veredicto.color }}
+          >
+            {veredicto.texto}
+          </h2>
+        </div>
+        <div className="flex gap-5 text-base" style={{ color: 'var(--text-dim)' }}>
+          <span>🔴 <strong style={{ color: 'var(--text)' }}>{urgentes}</strong> urgente{urgentes === 1 ? '' : 's'}</span>
+          <span>🟡 <strong style={{ color: 'var(--text)' }}>{vigilar}</strong> vigilar</span>
+          <span>🟢 <strong style={{ color: 'var(--text)' }}>{enOrden}</strong> en orden</span>
+        </div>
+      </section>
+
+      {/* ALERTAS */}
+      {alertas.length === 0 ? (
+        <section
+          className="rounded-xl border p-8 text-center"
+          style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
+        >
+          <p className="text-lg" style={{ color: 'var(--text-dim)' }}>
+            Sin señales todavía — faltan datos para evaluar el funnel. Vuelve
+            cuando haya leads marcados y gasto del mes.
+          </p>
+        </section>
+      ) : (
+        <div className="space-y-4">
+          {alertas.map((a, i) => (
+            <AlertaCard key={i} alerta={a} />
+          ))}
+        </div>
+      )}
+
+      {/* PIPELINE */}
+      <PipelineCard data={pipeline} />
+
+      {/* RESUMEN DEL MES */}
+      <ResumenMes comparativo={comparativo} />
+    </div>
+  );
+}
+
+function colorDe(nivel: Nivel): string {
+  return nivel === 'rojo'
+    ? 'var(--accent-orange)'
+    : nivel === 'ambar'
+    ? 'var(--accent-yellow)'
+    : 'var(--accent-green)';
+}
+
+function AlertaCard({ alerta }: { alerta: Alerta }) {
+  const color = colorDe(alerta.nivel);
   return (
     <section
-      className="rounded-xl border p-6 md:p-8"
+      className="rounded-xl border p-5 md:p-6"
       style={{
         background: 'var(--card-bg)',
-        borderColor: data.color,
-        borderWidth: 2,
+        borderColor: 'var(--card-border)',
+        borderLeft: `4px solid ${color}`,
       }}
     >
-      <div className="flex items-start gap-4">
-        <span className="text-4xl shrink-0 leading-none">{data.emoji}</span>
-        <div className="flex-1">
-          <h2
-            className="text-[24px] mb-2"
-            style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500, color: data.color }}
-          >
-            Diagnóstico
-          </h2>
-          <p className="text-lg leading-relaxed">{data.mensaje}</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex-1 min-w-[260px]">
+          <h3 className="text-xl mb-1" style={{ color, fontWeight: 600 }}>
+            {alerta.titulo}
+          </h3>
+          <p className="text-base leading-relaxed" style={{ color: 'var(--text-dim)' }}>
+            {alerta.detalle}
+          </p>
         </div>
+        <Link
+          href={alerta.href}
+          className="shrink-0 px-4 py-2 rounded-lg border text-base"
+          style={{ borderColor: 'var(--card-border)', color: 'var(--text-dim)' }}
+        >
+          {alerta.hrefLabel} →
+        </Link>
       </div>
     </section>
   );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PipelineCard — distribución de leads activos por madurez (Prompt 10)
+// PipelineCard — distribución de leads activos por madurez
 // ─────────────────────────────────────────────────────────────────────────────
 
 function PipelineCard({ data }: { data: DistribucionPipeline }) {
-  // Texto interpretativo automático
   let interpretacion: { texto: string; color: string };
   if (data.total === 0) {
     interpretacion = {
-      texto: 'No hay leads activos (asistieron a J1 y aún no cerraron). Cuando empieces a marcar leads, aparecerán aquí.',
+      texto: 'No hay leads activos (asistieron a J1 y aún no cierran).',
       color: 'var(--text-dim)',
     };
   } else if (data.pct_madura > 60) {
     interpretacion = {
-      texto: 'Pipeline maduro. La tasa de cierre actual es confiable como predictor.',
+      texto: 'Pipeline maduro, tasa de cierre confiable.',
       color: 'var(--accent-green)',
     };
   } else if (data.pct_reciente > 60) {
     interpretacion = {
-      texto: 'Pipeline nuevo. Esperá ~2 semanas para evaluar la tasa de cierre — la mayoría aún están en ventana de maduración.',
+      texto: 'Pipeline nuevo, esperá 2 semanas para evaluar.',
       color: 'var(--text-pending)',
     };
   } else {
     interpretacion = {
-      texto: 'Pipeline mixto. La tasa de cierre tiene confiabilidad parcial — algunos leads aún están madurando.',
+      texto: 'Pipeline mixto, confiabilidad parcial.',
       color: 'var(--accent-yellow)',
     };
   }
@@ -363,41 +380,29 @@ function PipelineCard({ data }: { data: DistribucionPipeline }) {
 
       {data.total > 0 && (
         <>
-          {/* Barra segmentada horizontal */}
           <div
             className="flex w-full h-8 rounded-md overflow-hidden border"
             style={{ borderColor: 'var(--card-border)' }}
           >
             {data.reciente > 0 && (
               <div
-                title={`Reciente: ${data.reciente} (${data.pct_reciente.toFixed(0)}%)`}
-                style={{
-                  width: `${data.pct_reciente}%`,
-                  background: 'var(--text-dim)',
-                }}
+                title={`Reciente: ${data.reciente}`}
+                style={{ width: `${data.pct_reciente}%`, background: 'var(--text-dim)' }}
               />
             )}
             {data.madurando > 0 && (
               <div
-                title={`Madurando: ${data.madurando} (${data.pct_madurando.toFixed(0)}%)`}
-                style={{
-                  width: `${data.pct_madurando}%`,
-                  background: 'var(--accent-yellow)',
-                }}
+                title={`Madurando: ${data.madurando}`}
+                style={{ width: `${data.pct_madurando}%`, background: 'var(--accent-yellow)' }}
               />
             )}
             {data.madura > 0 && (
               <div
-                title={`Madura: ${data.madura} (${data.pct_madura.toFixed(0)}%)`}
-                style={{
-                  width: `${data.pct_madura}%`,
-                  background: 'var(--accent-green)',
-                }}
+                title={`Madura: ${data.madura}`}
+                style={{ width: `${data.pct_madura}%`, background: 'var(--accent-green)' }}
               />
             )}
           </div>
-
-          {/* Leyenda con conteos y % */}
           <div className="flex flex-wrap gap-x-6 gap-y-2 mt-4 text-base">
             <span style={{ color: 'var(--text-dim)' }}>
               ⚪ Reciente: <strong>{data.reciente}</strong> ({data.pct_reciente.toFixed(0)}%)
@@ -420,74 +425,86 @@ function PipelineCard({ data }: { data: DistribucionPipeline }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Building blocks — Section, Grid, KPI
+// Resumen del mes — 4 números con flecha de tendencia vs mes anterior
 // ─────────────────────────────────────────────────────────────────────────────
 
-function Section({
-  title,
-  subtitle,
-  children,
-}: {
-  title: string;
-  subtitle: string;
-  children: React.ReactNode;
-}) {
+function Tendencia({ actual, anterior, invertir = false }: { actual: number; anterior: number; invertir?: boolean }) {
+  if (anterior === 0 && actual === 0) {
+    return <span style={{ color: 'var(--text-pending)' }}>→</span>;
+  }
+  const sube = actual > anterior;
+  const igual = actual === anterior;
+  if (igual) return <span style={{ color: 'var(--text-pending)' }}>→</span>;
+  // invertir=true → subir es "malo" (ej: inversión) → color neutro
+  const color = invertir
+    ? 'var(--text-dim)'
+    : sube
+    ? 'var(--accent-green)'
+    : 'var(--accent-orange)';
+  return <span style={{ color }}>{sube ? '↑' : '↓'}</span>;
+}
+
+function ResumenMes({ comparativo }: { comparativo: ResumenComparativo }) {
+  const items = [
+    {
+      label: 'Inversión',
+      valor: fmtUSD(comparativo.inversion_usd.actual),
+      anterior: fmtUSD(comparativo.inversion_usd.anterior),
+      nodo: <Tendencia actual={comparativo.inversion_usd.actual} anterior={comparativo.inversion_usd.anterior} invertir />,
+    },
+    {
+      label: 'Agendas',
+      valor: fmtNumber(comparativo.agendas.actual),
+      anterior: fmtNumber(comparativo.agendas.anterior),
+      nodo: <Tendencia actual={comparativo.agendas.actual} anterior={comparativo.agendas.anterior} />,
+    },
+    {
+      label: 'Cash collected',
+      valor: fmtUSD(comparativo.cash_usd.actual),
+      anterior: fmtUSD(comparativo.cash_usd.anterior),
+      nodo: <Tendencia actual={comparativo.cash_usd.actual} anterior={comparativo.cash_usd.anterior} />,
+    },
+    {
+      label: 'Cierres',
+      valor: fmtNumber(comparativo.cierres.actual),
+      anterior: fmtNumber(comparativo.cierres.anterior),
+      nodo: <Tendencia actual={comparativo.cierres.actual} anterior={comparativo.cierres.anterior} />,
+    },
+  ];
+
   return (
     <section
       className="rounded-xl border p-6 md:p-8"
       style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
     >
       <h2
-        className="text-[28px]"
+        className="text-[28px] mb-1"
         style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500 }}
       >
-        {title}
+        Resumen del mes
       </h2>
-      <p className="text-base mt-1 mb-5" style={{ color: 'var(--text-dim)' }}>
-        {subtitle}
+      <p className="text-base mb-5" style={{ color: 'var(--text-dim)' }}>
+        Mes en curso vs mes anterior completo.
       </p>
-      {children}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {items.map((item) => (
+          <div
+            key={item.label}
+            className="rounded-lg border p-4"
+            style={{ borderColor: 'var(--card-border)', background: '#0f0f0f' }}
+          >
+            <div className="text-sm uppercase tracking-wider mb-2" style={{ color: 'var(--text-dim)' }}>
+              {item.label}
+            </div>
+            <div className="text-[26px] font-semibold tabular-nums flex items-center gap-2">
+              {item.valor} {item.nodo}
+            </div>
+            <div className="text-sm mt-1" style={{ color: 'var(--text-pending)' }}>
+              mes anterior: {item.anterior}
+            </div>
+          </div>
+        ))}
+      </div>
     </section>
-  );
-}
-
-function Grid({ children }: { children: React.ReactNode }) {
-  return <div className="grid grid-cols-2 md:grid-cols-4 gap-4">{children}</div>;
-}
-
-function KPI({
-  label,
-  value,
-  accent,
-  hint,
-}: {
-  label: string;
-  value: string;
-  accent: 'yellow' | 'green' | 'default';
-  hint?: string;
-}) {
-  const color =
-    accent === 'yellow'
-      ? 'var(--accent-yellow)'
-      : accent === 'green'
-      ? 'var(--accent-green)'
-      : 'var(--text)';
-  return (
-    <div
-      className="rounded-lg border p-4"
-      style={{ borderColor: 'var(--card-border)', background: '#0f0f0f' }}
-    >
-      <div className="text-sm uppercase tracking-wider mb-2" style={{ color: 'var(--text-dim)' }}>
-        {label}
-      </div>
-      <div className="text-[28px] font-semibold tabular-nums" style={{ color }}>
-        {value}
-      </div>
-      {hint && (
-        <div className="text-sm mt-1" style={{ color: 'var(--text-pending)' }}>
-          {hint}
-        </div>
-      )}
-    </div>
   );
 }

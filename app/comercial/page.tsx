@@ -12,10 +12,14 @@ import {
   listCohortesSemanales,
   listCohortesMensuales,
   getSCL,
+  getResumenComercialMaduras,
+  getTramosSCL,
   type CohorteSemana,
   type CohorteMes,
   type EstadoMadurezCohorte,
   type SCL,
+  type ResumenComercialMaduras,
+  type TramosSCL,
 } from '@/lib/queries';
 import { ayerEnTijuana } from '@/lib/date-utils';
 import { DashboardHeader } from '../_components/DashboardHeader';
@@ -81,13 +85,17 @@ export default async function ComercialPage() {
   let semanales: CohorteSemana[] = [];
   let mensuales: CohorteMes[] = [];
   let scl: SCL | null = null;
+  let maduras: ResumenComercialMaduras | null = null;
+  let tramos: TramosSCL | null = null;
   let errorMsg: string | null = null;
 
   try {
-    [semanales, mensuales, scl] = await Promise.all([
+    [semanales, mensuales, scl, maduras, tramos] = await Promise.all([
       listCohortesSemanales(8),
       listCohortesMensuales(6),
       getSCL(),
+      getResumenComercialMaduras(),
+      getTramosSCL(),
     ]);
   } catch (err) {
     errorMsg = err instanceof Error ? err.message : String(err);
@@ -104,8 +112,11 @@ export default async function ComercialPage() {
         <EmptyState />
       ) : (
         <div className="space-y-8">
-          {/* SCL — Sales Cycle Length */}
-          <SCLCard scl={scl} />
+          {/* KPIs ESTRELLA (8C) */}
+          {maduras && <KPIsComercial maduras={maduras} scl={scl} />}
+
+          {/* SCL — línea de tiempo de tramos (8C) */}
+          <SCLTimeline scl={scl} tramos={tramos} />
 
           <CohortesTable
             title="Cohortes semanales"
@@ -210,16 +221,111 @@ function CohortesTable({
               </tr>
             </thead>
             <tbody>
-              {cohortes.map((c) => {
-                const fechaInicio = 'semana_inicio' in c ? c.semana_inicio : c.mes_inicio;
-                const tasa = tasaCierre(c.cierres, c.limpias);
-                const tasaDisplay = renderTasa(tasa, c.estado_madurez);
-                const cohorteMes = c as CohorteMes;
-                return (
+              {(() => {
+                // 8C: maduras nítidas arriba, el resto atenuado abajo con separador
+                const maduras = cohortes.filter((c) => c.estado_madurez === 'madura');
+                const inmaduras = cohortes.filter((c) => c.estado_madurez !== 'madura');
+                const ordenadas = [...maduras, ...inmaduras];
+                const idxSeparador = maduras.length; // antes de la primera inmadura
+                return ordenadas.map((c, idx) => (
+                  <CohorteRowGroup
+                    key={'semana_inicio' in c ? c.semana_inicio : c.mes_inicio}
+                    c={c}
+                    fechaFormat={fechaFormat}
+                    showCiclo={showCiclo}
+                    atenuada={c.estado_madurez !== 'madura'}
+                    conSeparadorMaduras={idx === 0 && maduras.length > 0}
+                    conSeparadorInmaduras={idx === idxSeparador && inmaduras.length > 0}
+                  />
+                ));
+              })()}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// Fila de cohorte + separadores de grupo (8C)
+function CohorteRowGroup({
+  c,
+  fechaFormat,
+  showCiclo,
+  atenuada,
+  conSeparadorMaduras,
+  conSeparadorInmaduras,
+}: {
+  c: CohorteSemana | (CohorteMes & { dias_promedio_ciclo: number | null });
+  fechaFormat: (s: string) => string;
+  showCiclo: boolean;
+  atenuada: boolean;
+  conSeparadorMaduras: boolean;
+  conSeparadorInmaduras: boolean;
+}) {
+  const fechaInicio = 'semana_inicio' in c ? c.semana_inicio : c.mes_inicio;
+  const tasa = tasaCierre(c.cierres, c.limpias);
+  const tasaDisplay = renderTasa(tasa, c.estado_madurez);
+  const cohorteMes = c as CohorteMes;
+  const nCols = showCiclo ? 9 : 8;
+  return (
+    <>
+      {conSeparadorMaduras && (
+        <tr>
+          <td
+            colSpan={nCols}
+            className="px-5 py-2 text-sm uppercase tracking-wider"
+            style={{ background: '#0f1f17', color: 'var(--accent-green)' }}
+          >
+            Maduras · tasa confiable
+          </td>
+        </tr>
+      )}
+      {conSeparadorInmaduras && (
+        <tr>
+          <td
+            colSpan={nCols}
+            className="px-5 py-2 text-sm uppercase tracking-wider"
+            style={{ background: '#0f0f0f', color: 'var(--text-pending)' }}
+          >
+            Aún madurando · tasa parcial — estas tasas pueden cambiar, no cuentan para el ratio joya
+          </td>
+        </tr>
+      )}
+      <RowCohorte
+        c={c}
+        fechaInicio={fechaInicio}
+        tasaDisplay={tasaDisplay}
+        cohorteMes={cohorteMes}
+        fechaFormat={fechaFormat}
+        showCiclo={showCiclo}
+        atenuada={atenuada}
+      />
+    </>
+  );
+}
+
+function RowCohorte({
+  c,
+  fechaInicio,
+  tasaDisplay,
+  cohorteMes,
+  fechaFormat,
+  showCiclo,
+  atenuada,
+}: {
+  c: CohorteSemana | CohorteMes;
+  fechaInicio: string;
+  tasaDisplay: React.ReactNode;
+  cohorteMes: CohorteMes;
+  fechaFormat: (s: string) => string;
+  showCiclo: boolean;
+  atenuada: boolean;
+}) {
+  return (
                   <tr
-                    key={fechaInicio}
                     className="border-t"
-                    style={{ borderColor: 'var(--card-border)' }}
+                    style={{ borderColor: 'var(--card-border)', opacity: atenuada ? 0.55 : 1 }}
                   >
                     <td className="px-5 py-4 font-medium">{fechaFormat(fechaInicio)}</td>
                     <td className="px-4 py-4 text-right tabular-nums">{fmtNumber(c.total_j1)}</td>
@@ -259,13 +365,6 @@ function CohortesTable({
                       </span>
                     </td>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
   );
 }
 
@@ -314,74 +413,207 @@ function renderNoShow(total_j1: number, asistencias: number): React.ReactNode {
   return <span style={{ color }}>{noShow.toFixed(0)}%</span>;
 }
 
-// Card SCL — promedio + P90 de días entre fecha_agenda y fecha_primer_pago
-function SCLCard({ scl }: { scl: SCL | null }) {
-  const titulo = 'SCL — Sales Cycle Length';
-  const tagline = 'Días entre agendamiento de J1 y primer pago real.';
+// ─────────────────────────────────────────────────────────────────────────────
+// KPIs estrella (8C): Ratio joya · No-show · SCL promedio
+// ─────────────────────────────────────────────────────────────────────────────
+function KPIsComercial({ maduras, scl }: { maduras: ResumenComercialMaduras; scl: SCL | null }) {
+  const noShow =
+    maduras.total_j1 > 0
+      ? ((maduras.total_j1 - maduras.asistencias) / maduras.total_j1) * 100
+      : null;
 
-  // Sin datos suficientes
-  if (!scl || scl.count < 3) {
-    return (
-      <section
-        className="rounded-xl border p-6 md:p-8"
+  return (
+    <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* Ratio joya */}
+      <div
+        className="rounded-xl border p-6"
         style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
       >
-        <h2
-          className="text-[28px]"
-          style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500 }}
+        <div className="text-sm uppercase tracking-widest mb-2 flex items-center gap-2" style={{ color: 'var(--text-dim)' }}>
+          Ratio joya
+          <TermWithTooltip
+            term=""
+            explain="Cierres ÷ Limpias en cohortes maduras. Mide tu capacidad de cierre puro, independiente del volumen de leads."
+          />
+        </div>
+        <div
+          className="text-[40px] leading-none tracking-tight tabular-nums"
+          style={{
+            fontFamily: 'var(--font-cormorant)',
+            fontWeight: 500,
+            color:
+              maduras.tasa_cierre_madura === null
+                ? 'var(--text-pending)'
+                : maduras.tasa_cierre_madura >= 30
+                ? 'var(--accent-green)'
+                : maduras.tasa_cierre_madura < 20
+                ? 'var(--accent-orange)'
+                : 'var(--accent-yellow)',
+          }}
         >
-          {titulo}
-        </h2>
-        <p className="text-base mt-1" style={{ color: 'var(--text-dim)' }}>{tagline}</p>
-        <p className="mt-4 text-lg" style={{ color: 'var(--text-pending)' }}>
-          SCL: — (pocos datos: {scl?.count ?? 0} de 3 mínimos).
-          Captura <code>fecha_primer_pago</code> en al menos 3 leads para activar la métrica.
-        </p>
-      </section>
-    );
-  }
+          {maduras.tasa_cierre_madura !== null ? `${maduras.tasa_cierre_madura.toFixed(0)}%` : '—'}
+        </div>
+        <div className="text-sm mt-2" style={{ color: 'var(--text-pending)' }}>
+          {maduras.cierres} cierre{maduras.cierres === 1 ? '' : 's'} ÷ {maduras.limpias} limpia{maduras.limpias === 1 ? '' : 's'} (maduras)
+        </div>
+      </div>
+
+      {/* No-show */}
+      <div
+        className="rounded-xl border p-6"
+        style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
+      >
+        <div className="text-sm uppercase tracking-widest mb-2" style={{ color: 'var(--text-dim)' }}>
+          No-show rate
+        </div>
+        <div
+          className="text-[40px] leading-none tracking-tight tabular-nums"
+          style={{
+            fontFamily: 'var(--font-cormorant)',
+            fontWeight: 500,
+            color:
+              noShow === null
+                ? 'var(--text-pending)'
+                : noShow > 35
+                ? 'var(--accent-orange)'
+                : 'var(--accent-green)',
+          }}
+        >
+          {noShow !== null ? `${noShow.toFixed(0)}%` : '—'}
+        </div>
+        <div className="text-sm mt-2" style={{ color: 'var(--text-pending)' }}>
+          {noShow !== null && noShow > 35 ? '>35% — revisá recordatorios' : 'cohortes maduras'}
+        </div>
+      </div>
+
+      {/* SCL promedio */}
+      <div
+        className="rounded-xl border p-6"
+        style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
+      >
+        <div className="text-sm uppercase tracking-widest mb-2" style={{ color: 'var(--text-dim)' }}>
+          SCL promedio
+        </div>
+        <div
+          className="text-[40px] leading-none tracking-tight tabular-nums"
+          style={{
+            fontFamily: 'var(--font-cormorant)',
+            fontWeight: 500,
+            color: scl && scl.avg_dias !== null ? 'var(--accent-green)' : 'var(--text-pending)',
+          }}
+        >
+          {scl && scl.avg_dias !== null ? `${scl.avg_dias.toFixed(1)} días` : '—'}
+        </div>
+        <div className="text-sm mt-2" style={{ color: 'var(--text-pending)' }}>
+          {scl && scl.avg_dias !== null
+            ? `agenda → primer pago · P90: ${scl.p90_dias} días`
+            : `pocos datos (${scl?.count ?? 0} de 3 mínimos)`}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SCL como línea de tiempo (8C) — tramos promedio del ciclo de venta
+// ─────────────────────────────────────────────────────────────────────────────
+function SCLTimeline({ scl, tramos }: { scl: SCL | null; tramos: TramosSCL | null }) {
+  const sinDatos = !scl || scl.count < 3;
 
   return (
     <section
       className="rounded-xl border p-6 md:p-8"
       style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
     >
-      <h2
-        className="text-[28px]"
-        style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500 }}
-      >
-        {titulo}
+      <h2 className="text-[28px]" style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500 }}>
+        SCL — línea de tiempo del ciclo de venta
       </h2>
-      <p className="text-base mt-1 mb-4" style={{ color: 'var(--text-dim)' }}>
-        {tagline} Calculado sobre {scl.count} lead{scl.count === 1 ? '' : 's'} con ambas fechas.
+      <p className="text-base mt-1 mb-6" style={{ color: 'var(--text-dim)' }}>
+        Días promedio entre cada hito. Cada tramo se calcula solo con los leads
+        que tienen ambas fechas.
       </p>
-      <div className="flex flex-wrap items-baseline gap-8">
-        <div>
-          <div className="text-sm uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
-            Promedio
-          </div>
-          <div
-            className="text-[44px] leading-none tracking-tight tabular-nums"
-            style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500, color: 'var(--accent-green)' }}
-          >
-            {scl.avg_dias!.toFixed(1)}
-            <span className="text-xl ml-2" style={{ color: 'var(--text-dim)' }}>días</span>
-          </div>
+
+      {sinDatos && (
+        <p className="text-lg mb-6" style={{ color: 'var(--text-pending)' }}>
+          SCL global: — (pocos datos: {scl?.count ?? 0} de 3 leads mínimos con
+          fecha de primer pago). Los tramos abajo se muestran con la data
+          disponible.
+        </p>
+      )}
+
+      {/* Línea de tiempo horizontal */}
+      <div className="flex flex-wrap items-stretch gap-0 overflow-x-auto pb-2">
+        <TimelineNodo label="Día 0" sub="Agenda J1" />
+        {(tramos?.tramos ?? []).map((t) => (
+          <TimelineTramo key={t.label} tramo={t} esMasLento={tramos?.tramo_mas_lento === t.label} />
+        ))}
+      </div>
+
+      {!sinDatos && scl && (
+        <p className="text-base mt-5" style={{ color: 'var(--text-dim)' }}>
+          SCL total promedio:{' '}
+          <strong style={{ color: 'var(--accent-green)' }}>{scl.avg_dias!.toFixed(1)} días</strong>
+          {' '}· P90 (los lentos):{' '}
+          <strong style={{ color: 'var(--accent-yellow)' }}>{scl.p90_dias} días</strong>
+          {tramos?.tramo_mas_lento && (
+            <>
+              {' '}· Tramo más lento:{' '}
+              <strong style={{ color: 'var(--accent-orange)' }}>{tramos.tramo_mas_lento}</strong>
+            </>
+          )}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function TimelineNodo({ label, sub }: { label: string; sub: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center px-3 py-2 shrink-0">
+      <div
+        className="w-4 h-4 rounded-full mb-2"
+        style={{ background: 'var(--accent-yellow)' }}
+      />
+      <div className="text-base font-semibold">{label}</div>
+      <div className="text-sm" style={{ color: 'var(--text-dim)' }}>{sub}</div>
+    </div>
+  );
+}
+
+function TimelineTramo({ tramo, esMasLento }: { tramo: { label: string; dias_promedio: number | null; n: number }; esMasLento: boolean }) {
+  const [, destino] = tramo.label.split('→').map((s) => s.trim());
+  const tieneDato = tramo.dias_promedio !== null;
+  return (
+    <div className="flex items-center shrink-0">
+      {/* Conector con días */}
+      <div className="flex flex-col items-center px-1">
+        <div
+          className="text-sm mb-1 tabular-nums px-2 py-0.5 rounded"
+          style={{
+            color: tieneDato ? (esMasLento ? 'var(--accent-orange)' : 'var(--text)') : 'var(--text-pending)',
+            background: esMasLento && tieneDato ? '#2a1410' : 'transparent',
+          }}
+          title={`${tramo.n} lead${tramo.n === 1 ? '' : 's'} con ambas fechas`}
+        >
+          {tieneDato ? `+${tramo.dias_promedio!.toFixed(1)}d` : 's/d'}
         </div>
-        <div>
-          <div className="text-sm uppercase tracking-wider" style={{ color: 'var(--text-dim)' }}>
-            P90 (el 10% más lento)
-          </div>
-          <div
-            className="text-[44px] leading-none tracking-tight tabular-nums"
-            style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500, color: 'var(--accent-yellow)' }}
-          >
-            {scl.p90_dias}
-            <span className="text-xl ml-2" style={{ color: 'var(--text-dim)' }}>días</span>
-          </div>
+        <div
+          className="h-0.5 w-16 md:w-24"
+          style={{ background: tieneDato ? 'var(--card-border)' : '#1a1a1a' }}
+        />
+        <div className="text-[10px] mt-1" style={{ color: 'var(--text-pending)' }}>
+          n={tramo.n}
         </div>
       </div>
-    </section>
+      {/* Nodo destino */}
+      <div className="flex flex-col items-center justify-center px-3 py-2">
+        <div
+          className="w-4 h-4 rounded-full mb-2"
+          style={{ background: tieneDato ? 'var(--accent-green)' : '#1a1a1a' }}
+        />
+        <div className="text-base font-semibold">{destino}</div>
+      </div>
+    </div>
   );
 }
 

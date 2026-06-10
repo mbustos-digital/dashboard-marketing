@@ -110,6 +110,13 @@ export default async function RevenuePage({
                 : 'Mes en curso'
             }
           >
+            {/* BARRA DE CASCADA (8D): sobre lo vendido, cuánto se cobró y cuánto falta */}
+            <CascadaBar
+              sold={revenue.sold_revenue_usd}
+              cash={revenue.cash_collected_usd}
+              outstanding={revenue.outstanding_usd}
+            />
+
             <Grid>
               <KPI
                 label="Sold Revenue"
@@ -121,7 +128,11 @@ export default async function RevenuePage({
                 label="Cash Collected"
                 value={fmtUSD(revenue.cash_collected_usd)}
                 accent="green"
-                hint={`${revenue.primeros_pagos_en_periodo} cliente${revenue.primeros_pagos_en_periodo === 1 ? '' : 's'} con primer pago`}
+                hint={
+                  revenue.sold_revenue_usd > 0
+                    ? `${((revenue.cash_collected_usd / revenue.sold_revenue_usd) * 100).toFixed(0)}% de lo vendido · ${revenue.primeros_pagos_en_periodo} cliente${revenue.primeros_pagos_en_periodo === 1 ? '' : 's'} con primer pago`
+                    : `${revenue.primeros_pagos_en_periodo} cliente${revenue.primeros_pagos_en_periodo === 1 ? '' : 's'} con primer pago`
+                }
               />
               <KPI
                 label="Outstanding"
@@ -181,6 +192,67 @@ export default async function RevenuePage({
         </div>
       )}
     </main>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CascadaBar (8D) — proporción cobrado/pendiente sobre el total vendido
+// ─────────────────────────────────────────────────────────────────────────────
+
+function CascadaBar({
+  sold,
+  cash,
+  outstanding,
+}: {
+  sold: number;
+  cash: number;
+  outstanding: number;
+}) {
+  if (sold <= 0) {
+    return (
+      <p className="text-base mb-6" style={{ color: 'var(--text-pending)' }}>
+        Sin ventas en el período — la barra de cobranza aparece cuando haya un
+        cierre con monto.
+      </p>
+    );
+  }
+
+  // El cash puede superar lo vendido del período (cobros de meses previos) —
+  // capeamos visualmente a 100%.
+  const pctCash = Math.min((cash / sold) * 100, 100);
+  const pctOut = Math.max(100 - pctCash, 0);
+
+  return (
+    <div className="mb-7">
+      <div
+        className="flex w-full h-10 rounded-lg overflow-hidden border"
+        style={{ borderColor: 'var(--card-border)' }}
+      >
+        {pctCash > 0 && (
+          <div
+            className="flex items-center justify-center text-sm font-semibold"
+            title={`Cobrado: ${pctCash.toFixed(0)}%`}
+            style={{ width: `${pctCash}%`, background: 'var(--accent-green)', color: '#000' }}
+          >
+            {pctCash >= 12 ? `${pctCash.toFixed(0)}%` : ''}
+          </div>
+        )}
+        {pctOut > 0 && (
+          <div
+            className="flex items-center justify-center text-sm font-semibold"
+            title={`Pendiente: ${pctOut.toFixed(0)}%`}
+            style={{ width: `${pctOut}%`, background: 'var(--accent-orange)', opacity: 0.85, color: '#000' }}
+          >
+            {pctOut >= 12 ? `${pctOut.toFixed(0)}%` : ''}
+          </div>
+        )}
+      </div>
+      <p className="text-base mt-2" style={{ color: 'var(--text-dim)' }}>
+        De <strong style={{ color: 'var(--accent-yellow)' }}>{fmtUSD(sold)}</strong> vendidos:{' '}
+        <strong style={{ color: 'var(--accent-green)' }}>{fmtUSD(cash)}</strong> cobrado y{' '}
+        <strong style={{ color: 'var(--accent-orange)' }}>{fmtUSD(Math.max(outstanding, 0))}</strong> pendiente.
+      </p>
+    </div>
   );
 }
 

@@ -6,11 +6,12 @@ import Link from 'next/link';
 
 export type TabKey = 'marketing' | 'comercial' | 'revenue' | 'general';
 
+// Orden 8A: Vista General primero — es el panel de salud, lo demás es detalle.
 const TABS: Array<{ key: TabKey; label: string; href: string }> = [
+  { key: 'general', label: 'Vista General', href: '/general' },
   { key: 'marketing', label: 'Marketing', href: '/' },
   { key: 'comercial', label: 'Comercial', href: '/comercial' },
   { key: 'revenue', label: 'Revenue', href: '/revenue' },
-  { key: 'general', label: 'Vista General', href: '/general' },
 ];
 
 export function DashboardTabs({ active }: { active: TabKey }) {
