@@ -13,7 +13,7 @@
  */
 export type MarketingMetricRow = {
   fecha: string; // YYYY-MM-DD
-  plataforma: 'meta' | 'youtube';
+  plataforma: 'meta' | 'youtube' | 'panda';
 
   // Identificadores Meta
   ad_account_id?: string | null;

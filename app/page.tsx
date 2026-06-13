@@ -19,6 +19,7 @@ import {
   getFunnelEtapas,
   listAnunciosGanadores,
   getResumenComparativo,
+  getVslSerie,
   type MarketingWindow,
   type CACAcumulado,
   type CACMensualEntry,
@@ -26,6 +27,7 @@ import {
   type FunnelEtapa,
   type AnuncioGanador,
   type ResumenComparativo,
+  type VslSerie,
 } from '@/lib/queries';
 import {
   ayerEnTijuana,
@@ -107,10 +109,11 @@ export default async function Page({
   let cacGlobal: CACAcumulado | null = null;
   let cacMensual: CACMensualEntry[] = [];
   let comparativo: ResumenComparativo | null = null;
+  let vslSerie: VslSerie | null = null;
   let errorMsg: string | null = null;
 
   try {
-    [mkt, funnel, anuncios, cacGlobal, cacMensual, comparativo] = await Promise.all([
+    [mkt, funnel, anuncios, cacGlobal, cacMensual, comparativo, vslSerie] = await Promise.all([
       getMarketingWindow(rangoDesde, rangoHasta),
       getFunnelEtapas(rangoDesde, rangoHasta),
       listAnunciosGanadores(),
@@ -119,6 +122,7 @@ export default async function Page({
       filtroActivo
         ? Promise.resolve(null)
         : getResumenComparativo(mesInicio, ayerReal, mesAnteriorInicio, mesAnteriorFin),
+      getVslSerie(56),
     ]);
   } catch (err) {
     errorMsg = err instanceof Error ? err.message : String(err);
@@ -150,6 +154,9 @@ export default async function Page({
 
           {/* 2 — FUNNEL DE GAUGES */}
           <FunnelGauges funnel={funnel} periodo={filtroActivo ? `${rangoDesde} → ${rangoHasta}` : 'Mes en curso'} />
+
+          {/* 2.5 — CARD VSL (Panda) */}
+          {vslSerie && <VslCard serie={vslSerie} />}
 
           {/* 3 — ANUNCIOS GANADORES */}
           <AnunciosGanadores anuncios={anuncios} />
@@ -637,5 +644,116 @@ function EficienciaSecundaria({ mkt }: { mkt: MarketingWindow }) {
         ))}
       </div>
     </section>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Card VSL (Panda Video) — Fase 5 v2
+// ─────────────────────────────────────────────────────────────────────────────
+
+function VslCard({ serie }: { serie: VslSerie }) {
+  const hayDatos = serie.dias.length > 0 && serie.total_plays > 0;
+
+  // Sparkline SVG de plays diarios
+  const W = 600;
+  const H = 60;
+  const maxPlays = Math.max(1, ...serie.dias.map((d) => d.plays));
+  const n = serie.dias.length;
+  const puntos = serie.dias.map((d, i) => {
+    const x = n > 1 ? (i / (n - 1)) * W : W / 2;
+    const y = H - (d.plays / maxPlays) * (H - 6) - 3;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+
+  return (
+    <section
+      className="rounded-xl border p-6 md:p-8"
+      style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
+    >
+      <div className="flex flex-wrap items-baseline justify-between gap-3 mb-4">
+        <div>
+          <h2 className="text-[28px]" style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500 }}>
+            VSL — reproducciones
+          </h2>
+          <p className="text-base" style={{ color: 'var(--text-dim)' }}>
+            Plays diarios (últimas 8 semanas). YouTube aporta la historia, Panda el presente.
+          </p>
+        </div>
+        {!serie.fuente_panda_activa && (
+          <span className="text-sm px-3 py-1 rounded" style={{ background: '#1a1a1a', color: 'var(--text-pending)' }}>
+            Panda: fuente conectándose
+          </span>
+        )}
+      </div>
+
+      {!hayDatos ? (
+        <p className="text-base py-4" style={{ color: 'var(--text-pending)' }}>
+          Aún sin reproducciones registradas. El cron de Panda corre a las 6:45 AM TJ.
+        </p>
+      ) : (
+        <>
+          {/* Sparkline */}
+          <svg viewBox={`0 0 ${W} ${H}`} className="w-full" preserveAspectRatio="none" style={{ height: 60 }}>
+            <polyline
+              points={puntos.join(' ')}
+              fill="none"
+              stroke="var(--accent-green)"
+              strokeWidth="2"
+              strokeLinejoin="round"
+              strokeLinecap="round"
+            />
+          </svg>
+
+          {/* Métricas */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-5">
+            <VslKpi label="Plays totales" value={fmtNumber(serie.total_plays)} accent="green" />
+            <VslKpi
+              label="Espectadores únicos"
+              value={serie.unique_viewers !== null ? fmtNumber(serie.unique_viewers) : '—'}
+              hint={serie.unique_viewers === null ? 'solo Panda' : undefined}
+            />
+            <VslKpi
+              label="Retención media"
+              value={serie.retention_pct !== null ? `${serie.retention_pct.toFixed(0)}%` : '—'}
+              accent="yellow"
+            />
+            <VslKpi
+              label="Tiempo promedio"
+              value={
+                serie.avg_watch_seconds !== null
+                  ? `${Math.floor(serie.avg_watch_seconds / 60)}:${String(Math.round(serie.avg_watch_seconds % 60)).padStart(2, '0')}`
+                  : '—'
+              }
+              hint="min:seg"
+            />
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
+function VslKpi({
+  label,
+  value,
+  accent,
+  hint,
+}: {
+  label: string;
+  value: string;
+  accent?: 'green' | 'yellow';
+  hint?: string;
+}) {
+  const color = accent === 'green' ? 'var(--accent-green)' : accent === 'yellow' ? 'var(--accent-yellow)' : 'var(--text)';
+  return (
+    <div className="rounded-lg border p-4" style={{ borderColor: 'var(--card-border)', background: '#0f0f0f' }}>
+      <div className="text-sm uppercase tracking-wider mb-2" style={{ color: 'var(--text-dim)' }}>
+        {label}
+      </div>
+      <div className="text-[26px] font-semibold tabular-nums" style={{ color }}>
+        {value}
+      </div>
+      {hint && <div className="text-sm mt-1" style={{ color: 'var(--text-pending)' }}>{hint}</div>}
+    </div>
   );
 }

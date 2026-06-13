@@ -129,8 +129,8 @@ export async function getMarketingWindow(
   const thanks_published_at = isoToFecha(thanksLatest?.raw_payload?.published_at);
   const thanks_prep_published_at = isoToFecha(thanksPrepLatest?.raw_payload?.published_at);
 
-  // Query paralelas: meta + youtube + leads (agendamientos) + cierres
-  const [metaRes, ytRes, leadsRes, cierresRes] = await Promise.all([
+  // Query paralelas: meta + youtube + panda + leads (agendamientos) + cierres
+  const [metaRes, ytRes, pandaRes, leadsRes, cierresRes] = await Promise.all([
     supabase
       .from('marketing_metrics_daily')
       .select('fecha, impressions, landing_page_views, clicks, link_clicks, reach, spend')
@@ -141,6 +141,13 @@ export async function getMarketingWindow(
       .from('marketing_metrics_daily')
       .select('fecha, youtube_video_id, youtube_video_type, youtube_views')
       .eq('plataforma', 'youtube')
+      .gte('fecha', start)
+      .lte('fecha', end),
+    // Panda Video (Fase 5 v2): la fuente honesta del VSL en el presente
+    supabase
+      .from('marketing_metrics_daily')
+      .select('fecha, video_plays')
+      .eq('plataforma', 'panda')
       .gte('fecha', start)
       .lte('fecha', end),
     supabase
@@ -158,11 +165,13 @@ export async function getMarketingWindow(
 
   if (metaRes.error) throw new Error(`Query Meta falló: ${metaRes.error.message}`);
   if (ytRes.error) throw new Error(`Query YouTube falló: ${ytRes.error.message}`);
+  if (pandaRes.error) throw new Error(`Query Panda falló: ${pandaRes.error.message}`);
   if (leadsRes.error) throw new Error(`Query leads falló: ${leadsRes.error.message}`);
   if (cierresRes.error) throw new Error(`Query cierres falló: ${cierresRes.error.message}`);
 
   const metaRows = (metaRes.data ?? []) as MetaRow[];
   const ytRows = (ytRes.data ?? []) as YouTubeRow[];
+  const pandaRows = (pandaRes.data ?? []) as Array<{ fecha: string; video_plays: number | null }>;
   const agendamientos = leadsRes.count ?? 0;
   const cierres_en_ventana = cierresRes.count ?? 0;
 
@@ -189,7 +198,15 @@ export async function getMarketingWindow(
   const thanksWithData = thanksRows.filter((r) => r.youtube_views !== null);
   const thanksPrepWithData = thanksPrepRows.filter((r) => r.youtube_views !== null);
 
-  const vsl_views = vslRows.length === 0 ? null : sum(vslWithData.map((r) => r.youtube_views));
+  // VSL unificado: YouTube aporta la historia (24-abr a 10-jun), Panda el
+  // presente. Sumamos los plays de Panda a las vistas YouTube del VSL.
+  // (Fase 5 v2: youtube no contaba los embeds con autoplay → daba 0%.)
+  const pandaPlays = sum(pandaRows.map((r) => r.video_plays));
+  const vslYoutube = vslRows.length === 0 ? null : sum(vslWithData.map((r) => r.youtube_views));
+  const vsl_views =
+    vslYoutube === null && pandaRows.length === 0
+      ? null
+      : (vslYoutube ?? 0) + pandaPlays;
   const thanks_views = thanksRows.length === 0 ? null : sum(thanksWithData.map((r) => r.youtube_views));
   const thanks_prep_views = thanksPrepRows.length === 0 ? null : sum(thanksPrepWithData.map((r) => r.youtube_views));
 
@@ -201,6 +218,7 @@ export async function getMarketingWindow(
   const fechasUnicas = new Set<string>();
   metaRows.forEach((r) => fechasUnicas.add(r.fecha));
   ytRows.forEach((r) => fechasUnicas.add(r.fecha));
+  pandaRows.forEach((r) => fechasUnicas.add(r.fecha));
 
   // ── Ratios ──
   const ratio_imp_landing = safeDiv(impressions, landing_page_views);
@@ -1016,5 +1034,86 @@ export async function getResumenComparativo(
     agendas: { actual: mktAct.agendamientos, anterior: mktAnt.agendamientos },
     cash_usd: { actual: revAct.cash_collected_usd, anterior: revAnt.cash_collected_usd },
     cierres: { actual: revAct.cierres_en_periodo, anterior: revAnt.cierres_en_periodo },
+  };
+}
+
+// =============================================================================
+// Serie diaria del VSL (Fase 5 v2) — para la card del tab Marketing
+// =============================================================================
+// Unifica YouTube (historia) + Panda (presente) en una sola línea de plays.
+
+export type VslSerie = {
+  dias: Array<{ fecha: string; plays: number }>;
+  total_plays: number;
+  unique_viewers: number | null;     // de Panda (YouTube no lo da por día)
+  retention_pct: number | null;      // engagement medio de Panda
+  avg_watch_seconds: number | null;
+  fuente_panda_activa: boolean;       // hay filas panda recientes
+};
+
+export async function getVslSerie(dias = 56): Promise<VslSerie> {
+  const supabase = getSupabaseServer();
+  const hasta = new Date();
+  const desde = new Date(hasta.getTime() - dias * 86400_000);
+  const fmt = (d: Date) =>
+    `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  const desdeStr = fmt(desde);
+  const hastaStr = fmt(hasta);
+
+  const [ytRes, pandaRes] = await Promise.all([
+    supabase
+      .from('marketing_metrics_daily')
+      .select('fecha, youtube_views')
+      .eq('plataforma', 'youtube')
+      .eq('youtube_video_type', 'vsl')
+      .gte('fecha', desdeStr)
+      .lte('fecha', hastaStr),
+    supabase
+      .from('marketing_metrics_daily')
+      .select('fecha, video_plays, video_unique_viewers, video_retention_p50, video_avg_watch_seconds')
+      .eq('plataforma', 'panda')
+      .gte('fecha', desdeStr)
+      .lte('fecha', hastaStr),
+  ]);
+
+  if (ytRes.error) throw new Error(`VSL serie YouTube falló: ${ytRes.error.message}`);
+  if (pandaRes.error) throw new Error(`VSL serie Panda falló: ${pandaRes.error.message}`);
+
+  const porFecha = new Map<string, number>();
+  for (const r of ytRes.data ?? []) {
+    porFecha.set(r.fecha, (porFecha.get(r.fecha) ?? 0) + Number(r.youtube_views ?? 0));
+  }
+  let unique = 0;
+  let retSum = 0;
+  let retN = 0;
+  let watchSum = 0;
+  let watchN = 0;
+  for (const r of pandaRes.data ?? []) {
+    porFecha.set(r.fecha, (porFecha.get(r.fecha) ?? 0) + Number(r.video_plays ?? 0));
+    unique += Number(r.video_unique_viewers ?? 0);
+    if (r.video_retention_p50 !== null && r.video_retention_p50 !== undefined) {
+      retSum += Number(r.video_retention_p50);
+      retN++;
+    }
+    if (r.video_avg_watch_seconds !== null && r.video_avg_watch_seconds !== undefined) {
+      watchSum += Number(r.video_avg_watch_seconds);
+      watchN++;
+    }
+  }
+
+  const diasArr = [...porFecha.entries()]
+    .map(([fecha, plays]) => ({ fecha, plays }))
+    .sort((a, b) => a.fecha.localeCompare(b.fecha));
+
+  const total_plays = diasArr.reduce((s, d) => s + d.plays, 0);
+  const pandaRows = pandaRes.data ?? [];
+
+  return {
+    dias: diasArr,
+    total_plays,
+    unique_viewers: pandaRows.length > 0 ? unique : null,
+    retention_pct: retN > 0 ? retSum / retN : null,
+    avg_watch_seconds: watchN > 0 ? watchSum / watchN : null,
+    fuente_panda_activa: pandaRows.length > 0,
   };
 }
