@@ -471,28 +471,41 @@ export async function upsertLeadFromMeta(input: {
  *
  * @returns { created: true } si fue insert, { created: false } si fue update.
  */
-export async function upsertLeadFromCalendly(input: {
-  email: string;
-  nombre: string;
-  fecha_agenda: string;
-  fecha_junta_1: string;
-  empresa?: string | null;
-  telefono?: string | null;
-  utm_source?: string | null;
-  utm_medium?: string | null;
-  utm_campaign?: string | null;
-  utm_content?: string | null;
-  respuesta_facturacion?: string | null;
-  respuesta_colaboradores?: string | null;
-  respuesta_objetivo?: string | null;
-  respuesta_cuando_empezar?: string | null;
-  visitor_id?: string | null;
-}): Promise<{ created: boolean; lead: Lead }> {
+export async function upsertLeadFromCalendly(
+  input: {
+    email: string;
+    nombre: string;
+    fecha_agenda: string;
+    fecha_junta_1: string;
+    empresa?: string | null;
+    telefono?: string | null;
+    utm_source?: string | null;
+    utm_medium?: string | null;
+    utm_campaign?: string | null;
+    utm_content?: string | null;
+    respuesta_facturacion?: string | null;
+    respuesta_colaboradores?: string | null;
+    respuesta_objetivo?: string | null;
+    respuesta_cuando_empezar?: string | null;
+    visitor_id?: string | null;
+  },
+  opts?: {
+    // Backfill histórico (Fase 2-bis): backdatea created_at del lead SOLO
+    // al crearlo, para que la fila refleje cuándo agendó realmente.
+    fechaCreacion?: string;
+    // Backfill histórico: en UPDATE solo completa campos vacíos del lead
+    // existente — NUNCA pisa datos ya cargados (fechas más recientes,
+    // empresa puesta a mano, etc.). El webhook en vivo usa false (default):
+    // refresca fechas porque Calendly es la fuente fresca.
+    soloCompletarVacios?: boolean;
+  },
+): Promise<{ created: boolean; lead: Lead }> {
   if (!input.email || !input.email.includes('@')) {
     throw new Error('Email inválido en payload de Calendly');
   }
   const emailNorm = input.email.trim().toLowerCase();
   const telNorm = normalizarTelefono(input.telefono);
+  const soloVacios = opts?.soloCompletarVacios ?? false;
 
   const supabase = getSupabaseServer();
 
@@ -518,8 +531,7 @@ export async function upsertLeadFromCalendly(input: {
     existing = (data as Lead | null) ?? null;
   }
 
-  // Base de payload — campos que SIEMPRE se actualizan en update (no rompen
-  // atribución existente porque son datos de contacto / agenda).
+  // Base de payload — campos de contacto / agenda.
   const basePayload = {
     nombre: input.nombre.trim(),
     email: emailNorm,
@@ -531,22 +543,53 @@ export async function upsertLeadFromCalendly(input: {
   };
 
   if (existing) {
-    // UTMs y respuestas: solo incluir en el update si VIENEN con valor. Si
-    // no vienen, no los tocamos — preservamos los datos originales (la
-    // primera respuesta es la más confiable; un re-agendamiento podría no
-    // re-enviar las respuestas).
-    const extraUpdates: Record<string, string> = {};
-    if (input.utm_source)              extraUpdates.utm_source              = input.utm_source;
-    if (input.utm_medium)              extraUpdates.utm_medium              = input.utm_medium;
-    if (input.utm_campaign)            extraUpdates.utm_campaign            = input.utm_campaign;
-    if (input.utm_content)             extraUpdates.utm_content             = input.utm_content;
-    if (input.respuesta_facturacion)   extraUpdates.respuesta_facturacion   = input.respuesta_facturacion;
-    if (input.respuesta_colaboradores) extraUpdates.respuesta_colaboradores = input.respuesta_colaboradores;
-    if (input.respuesta_objetivo)      extraUpdates.respuesta_objetivo      = input.respuesta_objetivo;
-    if (input.respuesta_cuando_empezar) extraUpdates.respuesta_cuando_empezar = input.respuesta_cuando_empezar;
-    if (input.visitor_id)              extraUpdates.visitor_id              = input.visitor_id;
+    let updatePayload: Record<string, unknown>;
 
-    const updatePayload = { ...basePayload, ...extraUpdates };
+    if (soloVacios) {
+      // BACKFILL: solo rellena lo que está vacío en el lead existente.
+      // Nunca pisa fechas, empresa, ni atribución ya cargada.
+      updatePayload = {};
+      const setIfEmpty = (campo: keyof Lead, valor: string | null | undefined) => {
+        const actual = existing![campo];
+        if ((actual === null || actual === undefined || actual === '') && valor) {
+          updatePayload[campo] = valor;
+        }
+      };
+      setIfEmpty('email', emailNorm);
+      setIfEmpty('telefono', input.telefono?.trim() || null);
+      setIfEmpty('telefono_normalizado', telNorm);
+      setIfEmpty('empresa', input.empresa?.trim() || null);
+      setIfEmpty('fecha_agenda', input.fecha_agenda);
+      setIfEmpty('fecha_junta_1', input.fecha_junta_1);
+      setIfEmpty('utm_source', input.utm_source);
+      setIfEmpty('utm_medium', input.utm_medium);
+      setIfEmpty('utm_campaign', input.utm_campaign);
+      setIfEmpty('utm_content', input.utm_content);
+      setIfEmpty('respuesta_facturacion', input.respuesta_facturacion);
+      setIfEmpty('respuesta_colaboradores', input.respuesta_colaboradores);
+      setIfEmpty('respuesta_objetivo', input.respuesta_objetivo);
+      setIfEmpty('respuesta_cuando_empezar', input.respuesta_cuando_empezar);
+      setIfEmpty('visitor_id', input.visitor_id);
+
+      // Nada que completar → no escribir
+      if (Object.keys(updatePayload).length === 0) {
+        return { created: false, lead: existing };
+      }
+    } else {
+      // WEBHOOK EN VIVO: refresca contacto/agenda; UTMs y respuestas solo
+      // si vienen con valor (no borrar lo que ya estaba).
+      const extraUpdates: Record<string, string> = {};
+      if (input.utm_source)               extraUpdates.utm_source               = input.utm_source;
+      if (input.utm_medium)               extraUpdates.utm_medium               = input.utm_medium;
+      if (input.utm_campaign)             extraUpdates.utm_campaign             = input.utm_campaign;
+      if (input.utm_content)              extraUpdates.utm_content              = input.utm_content;
+      if (input.respuesta_facturacion)    extraUpdates.respuesta_facturacion    = input.respuesta_facturacion;
+      if (input.respuesta_colaboradores)  extraUpdates.respuesta_colaboradores  = input.respuesta_colaboradores;
+      if (input.respuesta_objetivo)       extraUpdates.respuesta_objetivo       = input.respuesta_objetivo;
+      if (input.respuesta_cuando_empezar) extraUpdates.respuesta_cuando_empezar = input.respuesta_cuando_empezar;
+      if (input.visitor_id)               extraUpdates.visitor_id               = input.visitor_id;
+      updatePayload = { ...basePayload, ...extraUpdates };
+    }
 
     const { data, error } = await supabase
       .from('leads')
@@ -571,6 +614,8 @@ export async function upsertLeadFromCalendly(input: {
     respuesta_objetivo:       input.respuesta_objetivo       ?? null,
     respuesta_cuando_empezar: input.respuesta_cuando_empezar ?? null,
     visitor_id:               input.visitor_id               ?? null,
+    // Backdatear created_at SOLO en backfill, para reflejar cuándo agendó
+    ...(opts?.fechaCreacion ? { created_at: opts.fechaCreacion } : {}),
   };
 
   const { data, error } = await supabase
