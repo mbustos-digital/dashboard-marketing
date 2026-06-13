@@ -16,6 +16,7 @@ import {
   fetchMetaInsights,
   parseInsightsToMetrics,
   upsertMetrics,
+  fetchAdsetBudgets,
   MetaTokenError,
   MetaRateLimitError,
   MetaApiError,
@@ -56,9 +57,20 @@ export async function GET(request: NextRequest) {
     const metrics = parseInsightsToMetrics(insights, fecha);
     const inserted = await upsertMetrics(metrics);
 
+    // Presupuestos de adsets (Fase 1 v2) — si falla, loguear y NO romper
+    // el resto del cron: las métricas ya quedaron guardadas.
+    let budgets_saved = 0;
+    let budgets_error: string | null = null;
+    try {
+      budgets_saved = await fetchAdsetBudgets(fecha);
+    } catch (err) {
+      budgets_error = err instanceof Error ? err.message : String(err);
+      console.error(`[cron:meta-daily] budgets falló (no fatal): ${budgets_error}`);
+    }
+
     const ms = Date.now() - tStart;
     console.log(
-      `[cron:meta-daily] fecha=${fecha} insights=${insights.length} inserted=${inserted} ms=${ms}`,
+      `[cron:meta-daily] fecha=${fecha} insights=${insights.length} inserted=${inserted} budgets=${budgets_saved} ms=${ms}`,
     );
 
     return Response.json({
@@ -66,6 +78,8 @@ export async function GET(request: NextRequest) {
       fecha,
       insights_received: insights.length,
       rows_inserted: inserted,
+      budgets_saved,
+      ...(budgets_error ? { budgets_error } : {}),
       ms,
     });
   } catch (err) {

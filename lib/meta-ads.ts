@@ -14,7 +14,7 @@
 // =============================================================================
 
 import { getSupabaseServer } from './supabase';
-import type { MarketingMetricRow, MetaInsightRaw } from './types';
+import type { MarketingMetricRow, MetaInsightRaw, MetaAdsetRaw } from './types';
 
 const GRAPH_BASE = 'https://graph.facebook.com';
 const MAX_BACKOFF_ATTEMPTS = 5;
@@ -157,6 +157,8 @@ export async function fetchMetaInsights(
     'campaign_id',
     'campaign_name',
     'account_id',
+    'ad_id',
+    'ad_name',
     'impressions',
     'reach',
     'frequency',
@@ -168,10 +170,18 @@ export async function fetchMetaInsights(
     'spend',
     'actions',
     'cost_per_action_type',
+    // Métricas de video (Fase 1 v2) — vienen como arrays {action_type, value};
+    // se toma el action_type 'video_view'
+    'video_thruplay_watched_actions',
+    'video_p25_watched_actions',
+    'video_p50_watched_actions',
+    'video_p75_watched_actions',
+    'video_p100_watched_actions',
+    'video_avg_time_watched_actions',
   ].join(',');
 
   const url = new URL(`${GRAPH_BASE}/${apiVersion}/${adAccountId}/insights`);
-  url.searchParams.set('level', 'adset');
+  url.searchParams.set('level', 'ad');
   url.searchParams.set('fields', fields);
   url.searchParams.set('action_breakdowns', 'action_type');
   url.searchParams.set(
@@ -213,6 +223,32 @@ export function parseInsightsToMetrics(
       'landing_page_view',
     );
 
+    // Leads del instant form: action_type 'lead'; si no existe, el agrupado
+    // onsite_conversion.lead_grouped. NUNCA sumar ambos — es el mismo evento
+    // contado dos veces.
+    const leadsDirect = findActionValue(ins.actions, 'lead');
+    const leadsGrouped = findActionValue(
+      ins.actions,
+      'onsite_conversion.lead_grouped',
+    );
+    const leadsCount = leadsDirect ?? leadsGrouped;
+
+    // Video: las *_watched_actions vienen como arrays {action_type, value};
+    // el valor real está bajo action_type 'video_view'
+    const video3s = findActionValue(ins.actions, 'video_view');
+    const videoThruplay = findActionValue(
+      ins.video_thruplay_watched_actions,
+      'video_view',
+    );
+    const videoP25 = findActionValue(ins.video_p25_watched_actions, 'video_view');
+    const videoP50 = findActionValue(ins.video_p50_watched_actions, 'video_view');
+    const videoP75 = findActionValue(ins.video_p75_watched_actions, 'video_view');
+    const videoP100 = findActionValue(ins.video_p100_watched_actions, 'video_view');
+    const videoAvgWatch = findActionValue(
+      ins.video_avg_time_watched_actions,
+      'video_view',
+    );
+
     return {
       fecha,
       plataforma: 'meta',
@@ -222,6 +258,17 @@ export function parseInsightsToMetrics(
       campaign_name: ins.campaign_name ?? null,
       adset_id: ins.adset_id ?? null,
       adset_name: ins.adset_name ?? null,
+      ad_id: ins.ad_id ?? null,
+      ad_name: ins.ad_name ?? null,
+
+      leads_count: leadsCount,
+      video_3s_views: video3s,
+      video_thruplay: videoThruplay,
+      video_p25: videoP25,
+      video_p50: videoP50,
+      video_p75: videoP75,
+      video_p100: videoP100,
+      video_avg_watch_seconds: videoAvgWatch,
 
       impressions: toNum(ins.impressions),
       reach: toNum(ins.reach),
@@ -302,4 +349,76 @@ export async function upsertMetrics(
   }
 
   return data?.length ?? 0;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Presupuestos diarios de adsets (Fase 1 v2 — señal de RITMO de Recon)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Trae los adsets del Ad Account con su presupuesto diario y los upsertea en
+ * adset_budget_daily para la fecha indicada.
+ *
+ * Meta solo expone el valor ACTUAL del presupuesto — no hay histórico, por
+ * eso este snapshot diario es la única forma de construir la serie. El budget
+ * se guarda en MXN crudo (daily_budget llega en CENTAVOS de MXN: /100).
+ *
+ * @returns número de adsets guardados
+ */
+export async function fetchAdsetBudgets(fecha: string): Promise<number> {
+  const adAccountId = getEnv('META_AD_ACCOUNT_ID');
+  const apiVersion = getEnv('META_API_VERSION');
+  const token = getEnv('META_ACCESS_TOKEN');
+
+  const url = new URL(`${GRAPH_BASE}/${apiVersion}/${adAccountId}/adsets`);
+  url.searchParams.set('fields', 'id,name,daily_budget,status,effective_status');
+  url.searchParams.set('limit', String(PAGE_SIZE));
+  url.searchParams.set('access_token', token);
+
+  type AdsetsPage = {
+    data?: MetaAdsetRaw[];
+    paging?: { next?: string };
+    error?: { message: string; code?: number; error_subcode?: number };
+  };
+
+  const all: MetaAdsetRaw[] = [];
+  let nextUrl: string | null = url.toString();
+  let pages = 0;
+
+  while (nextUrl) {
+    if (++pages > MAX_PAGES) {
+      throw new MetaApiError(`Demasiadas páginas de adsets (>${MAX_PAGES})`);
+    }
+    const page = (await fetchPageWithBackoff(nextUrl)) as AdsetsPage;
+    if (Array.isArray(page.data)) all.push(...page.data);
+    nextUrl = page.paging?.next ?? null;
+  }
+
+  const rows = all
+    .filter((a) => a.id)
+    .map((a) => ({
+      fecha,
+      adset_id: a.id!,
+      adset_name: a.name ?? null,
+      // daily_budget viene en centavos de MXN. Adsets sin budget propio
+      // (budget a nivel campaña / CBO) no traen el campo → NULL.
+      daily_budget_mxn:
+        a.daily_budget !== undefined && a.daily_budget !== null
+          ? Number(a.daily_budget) / 100
+          : null,
+      status: a.effective_status ?? a.status ?? null,
+    }));
+
+  if (rows.length === 0) return 0;
+
+  const supabase = getSupabaseServer();
+  // PK (fecha, adset_id) → upsert directo es idempotente
+  const { error } = await supabase
+    .from('adset_budget_daily')
+    .upsert(rows, { onConflict: 'fecha,adset_id' });
+  if (error) {
+    throw new Error(`Error upserteando adset budgets: ${error.message}`);
+  }
+
+  return rows.length;
 }
