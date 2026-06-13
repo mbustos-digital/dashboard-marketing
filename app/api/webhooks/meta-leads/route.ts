@@ -20,10 +20,11 @@
 import crypto from 'node:crypto';
 import type { NextRequest } from 'next/server';
 import { upsertLeadFromMeta } from '@/lib/leads';
+import { parseLeadFields, META_GRAPH_VERSION } from '@/lib/meta-leads';
 
 export const dynamic = 'force-dynamic';
 
-const GRAPH_VERSION = process.env.META_API_VERSION || 'v24.0';
+const GRAPH_VERSION = META_GRAPH_VERSION;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET — verificación del webhook (handshake de Meta) + healthcheck
@@ -96,18 +97,6 @@ type GraphLeadResponse = {
   ad_id?: string;
   error?: { code?: number; message?: string };
 };
-
-function extractField(
-  fieldData: GraphLeadResponse['field_data'],
-  names: string[],
-): string | null {
-  if (!fieldData) return null;
-  const lowered = names.map((n) => n.toLowerCase());
-  const found = fieldData.find(
-    (f) => f.name && lowered.some((n) => f.name!.toLowerCase().includes(n)),
-  );
-  return found?.values?.[0]?.trim() || null;
-}
 
 async function fetchLeadFromGraph(leadgenId: string): Promise<GraphLeadResponse> {
   const token = process.env.META_PAGE_ACCESS_TOKEN;
@@ -191,14 +180,7 @@ export async function POST(request: NextRequest) {
   for (const leadgenId of leadgenIds) {
     try {
       const graphLead = await fetchLeadFromGraph(leadgenId);
-      const fieldData = graphLead.field_data;
-
-      const email = extractField(fieldData, ['email', 'correo']);
-      const nombre =
-        extractField(fieldData, ['full_name', 'full name', 'nombre completo', 'name', 'nombre']) ??
-        'Lead sin nombre (Meta)';
-      const telefono = extractField(fieldData, ['phone', 'teléfono', 'telefono', 'celular']);
-      const empresa = extractField(fieldData, ['company', 'empresa', 'negocio', 'organiz']);
+      const { email, nombre, telefono, empresa } = parseLeadFields(graphLead.field_data);
 
       const { created, lead } = await upsertLeadFromMeta({
         email,

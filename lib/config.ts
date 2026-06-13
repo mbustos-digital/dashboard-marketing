@@ -28,3 +28,10 @@ export function mxnAUsd(montoMxn: number | null | undefined): number {
   }
   return montoMxn / TIPO_DE_CAMBIO_USD_MXN;
 }
+
+/**
+ * ID de la página de Facebook "Mauricio Bustos Eguia", dueña de los
+ * formularios instantáneos. Usado por el cron de polling de leads (Fase 4 v2)
+ * para listar los leadgen_forms.
+ */
+export const META_PAGE_ID = '282881742134130';
