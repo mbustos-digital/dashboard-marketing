@@ -35,6 +35,7 @@ import {
   primerDiaDelMesDeFecha,
   diasAntes,
 } from '@/lib/date-utils';
+import { getDataSources, sourcesToMap } from '@/lib/sources';
 import { DashboardHeader } from './_components/DashboardHeader';
 import { DashboardTabs } from './_components/DashboardTabs';
 import { FechaSelector } from './_components/FechaSelector';
@@ -113,9 +114,10 @@ export default async function Page({
   let errorMsg: string | null = null;
 
   try {
+    const sourceMap = sourcesToMap(await getDataSources());
     [mkt, funnel, anuncios, cacGlobal, cacMensual, comparativo, vslSerie] = await Promise.all([
       getMarketingWindow(rangoDesde, rangoHasta),
-      getFunnelEtapas(rangoDesde, rangoHasta),
+      getFunnelEtapas(rangoDesde, rangoHasta, sourceMap),
       listAnunciosGanadores(),
       getCACAcumulado(filtroActivo ? rangoHasta : undefined),
       listCACMensual(12),
@@ -365,14 +367,26 @@ function Gauge({ etapa, esCuello }: { etapa: FunnelEtapa; esCuello: boolean }) {
           textAnchor="middle"
           fontSize="17"
           fontWeight="600"
-          fill={pct !== null ? color : 'var(--text-pending)'}
+          fill={pct !== null && !etapa.muestra_chica && !etapa.fuente_pendiente ? color : 'var(--text-pending)'}
         >
-          {pct !== null ? `${pct < 10 ? pct.toFixed(1) : pct.toFixed(0)}%` : '—'}
+          {etapa.fuente_pendiente
+            ? '—'
+            : etapa.muestra_chica
+            ? `${etapa.salida}/${etapa.entrada}`
+            : pct !== null
+            ? `${pct < 10 ? pct.toFixed(1) : pct.toFixed(0)}%`
+            : '—'}
         </text>
       </svg>
 
       <div className="text-center text-sm mt-1 tabular-nums" style={{ color: 'var(--text-pending)' }}>
-        {fmtNumber(etapa.entrada)} → {fmtNumber(etapa.salida)}
+        {etapa.fuente_pendiente ? (
+          <span style={{ color: 'var(--accent-orange)' }}>fuente pendiente</span>
+        ) : etapa.muestra_chica ? (
+          <span>pocos datos (n={etapa.entrada})</span>
+        ) : (
+          <>{fmtNumber(etapa.entrada)} → {fmtNumber(etapa.salida)}</>
+        )}
       </div>
     </div>
   );

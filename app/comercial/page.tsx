@@ -442,7 +442,9 @@ function KPIsComercial({ maduras, scl }: { maduras: ResumenComercialMaduras; scl
             fontFamily: 'var(--font-cormorant)',
             fontWeight: 500,
             color:
-              maduras.tasa_cierre_madura === null
+              maduras.limpias < 3
+                ? 'var(--text-pending)'
+                : maduras.tasa_cierre_madura === null
                 ? 'var(--text-pending)'
                 : maduras.tasa_cierre_madura >= 30
                 ? 'var(--accent-green)'
@@ -451,10 +453,17 @@ function KPIsComercial({ maduras, scl }: { maduras: ResumenComercialMaduras; scl
                 : 'var(--accent-yellow)',
           }}
         >
-          {maduras.tasa_cierre_madura !== null ? `${maduras.tasa_cierre_madura.toFixed(0)}%` : '—'}
+          {/* Guardia Fase 7: con <3 limpias mostramos conteo, no % gigante */}
+          {maduras.limpias < 3
+            ? `${maduras.cierres} de ${maduras.limpias}`
+            : maduras.tasa_cierre_madura !== null
+            ? `${maduras.tasa_cierre_madura.toFixed(0)}%`
+            : '—'}
         </div>
         <div className="text-sm mt-2" style={{ color: 'var(--text-pending)' }}>
-          {maduras.cierres} cierre{maduras.cierres === 1 ? '' : 's'} ÷ {maduras.limpias} limpia{maduras.limpias === 1 ? '' : 's'} (maduras)
+          {maduras.limpias < 3
+            ? 'pocos datos — se muestra conteo, no %'
+            : `${maduras.cierres} cierre${maduras.cierres === 1 ? '' : 's'} ÷ ${maduras.limpias} limpia${maduras.limpias === 1 ? '' : 's'} (maduras)`}
         </div>
       </div>
 
@@ -472,17 +481,28 @@ function KPIsComercial({ maduras, scl }: { maduras: ResumenComercialMaduras; scl
             fontFamily: 'var(--font-cormorant)',
             fontWeight: 500,
             color:
-              noShow === null
+              maduras.total_j1 < 3
+                ? 'var(--text-pending)'
+                : noShow === null
                 ? 'var(--text-pending)'
                 : noShow > 35
                 ? 'var(--accent-orange)'
                 : 'var(--accent-green)',
           }}
         >
-          {noShow !== null ? `${noShow.toFixed(0)}%` : '—'}
+          {/* Guardia Fase 7: con <3 J1 mostramos conteo */}
+          {maduras.total_j1 < 3
+            ? `${maduras.total_j1 - maduras.asistencias} de ${maduras.total_j1}`
+            : noShow !== null
+            ? `${noShow.toFixed(0)}%`
+            : '—'}
         </div>
         <div className="text-sm mt-2" style={{ color: 'var(--text-pending)' }}>
-          {noShow !== null && noShow > 35 ? '>35% — revisá recordatorios' : 'cohortes maduras'}
+          {maduras.total_j1 < 3
+            ? 'pocos datos (no-shows / J1)'
+            : noShow !== null && noShow > 35
+            ? '>35% — revisá recordatorios'
+            : 'cohortes maduras'}
         </div>
       </div>
 

@@ -795,6 +795,9 @@ export type FunnelEtapa = {
   pct: number | null;          // salida/entrada * 100, null si entrada=0
   benchmark: string;           // texto del tooltip de info
   salud: 'verde' | 'ambar' | 'rojo' | 'sin_datos';
+  fuenteKey: string | null;    // qué fuente alimenta esta etapa (null = carga manual)
+  fuente_pendiente: boolean;   // true si su fuente está off (Fase 7) → no es 0%, no existe
+  muestra_chica: boolean;      // true si el denominador < 3 → mostrar conteo, no %
 };
 
 export type FunnelMes = {
@@ -802,7 +805,14 @@ export type FunnelMes = {
   cuelloKey: string | null;    // etapa con peor conversión (entre las que tienen datos)
 };
 
-export async function getFunnelEtapas(start: string, end: string): Promise<FunnelMes> {
+// Mínimo de denominador para tratar un % como confiable (Fase 7)
+export const MIN_MUESTRA = 3;
+
+export async function getFunnelEtapas(
+  start: string,
+  end: string,
+  sourceMap?: Record<string, 'ok' | 'stale' | 'off'>,
+): Promise<FunnelMes> {
   const supabase = getSupabaseServer();
 
   const [mkt, leadsRes] = await Promise.all([
@@ -846,13 +856,14 @@ export async function getFunnelEtapas(start: string, end: string): Promise<Funne
     }
   };
 
-  const defs: Array<Omit<FunnelEtapa, 'pct' | 'salud'>> = [
+  const defs: Array<Omit<FunnelEtapa, 'pct' | 'salud' | 'fuente_pendiente' | 'muestra_chica'>> = [
     {
       key: 'imp_landing',
       label: 'Impresión → Landing',
       entrada: mkt.impressions,
       salida: mkt.landing_page_views,
       benchmark: 'CTR promedio de Facebook 0.9–1.5%. <0.5% malo, >1.5% fuerte.',
+      fuenteKey: 'meta_insights',
     },
     {
       key: 'landing_vsl',
@@ -860,6 +871,7 @@ export async function getFunnelEtapas(start: string, end: string): Promise<Funne
       entrada: mkt.landing_page_views,
       salida: mkt.vsl_views ?? 0,
       benchmark: 'Referencia interna: <20% es flojo. Comparalo contra tu propio número mes a mes.',
+      fuenteKey: 'vsl_panda',
     },
     {
       key: 'vsl_agenda',
@@ -867,6 +879,7 @@ export async function getFunnelEtapas(start: string, end: string): Promise<Funne
       entrada: mkt.vsl_views ?? 0,
       salida: mkt.agendamientos,
       benchmark: 'Referencia interna: compará mes a mes. Subirlo = mejor oferta/CTA del VSL.',
+      fuenteKey: 'vsl_panda',
     },
     {
       key: 'agenda_asistio',
@@ -874,6 +887,7 @@ export async function getFunnelEtapas(start: string, end: string): Promise<Funne
       entrada: total_j1,
       salida: asistencias,
       benchmark: 'No-show >35% (asistencia <65%) sugiere problema de recordatorios o calificación previa.',
+      fuenteKey: 'calendly',
     },
     {
       key: 'asistio_calificado',
@@ -881,6 +895,7 @@ export async function getFunnelEtapas(start: string, end: string): Promise<Funne
       entrada: asistencias,
       salida: limpias,
       benchmark: 'Mide la calidad del lead que llega a J1. Bajo = atraes al perfil equivocado.',
+      fuenteKey: null, // carga manual — siempre "disponible"
     },
     {
       key: 'calificado_cierre',
@@ -888,17 +903,23 @@ export async function getFunnelEtapas(start: string, end: string): Promise<Funne
       entrada: limpias,
       salida: cierres,
       benchmark: 'Ratio joya. ≥30% sano, 20-30% mixto, <20% problema de venta (J2, oferta, objeciones).',
+      fuenteKey: null,
     },
   ];
 
   const etapas: FunnelEtapa[] = defs.map((d) => {
     const pct = pctDe(d.salida, d.entrada);
-    return { ...d, pct, salud: saludDe(d.key, pct) };
+    // Fuente off → la etapa no tiene dato (no es 0%), queda fuera del cuello
+    const fuente_pendiente = d.fuenteKey != null && sourceMap?.[d.fuenteKey] === 'off';
+    // Muestra chica → % no confiable, se trata como sin_datos para el cuello
+    const muestra_chica = d.entrada < MIN_MUESTRA;
+    const salud: FunnelEtapa['salud'] =
+      fuente_pendiente || muestra_chica ? 'sin_datos' : saludDe(d.key, pct);
+    return { ...d, pct, salud, fuente_pendiente, muestra_chica };
   });
 
-  // Cuello de botella: peor % normalizado contra su umbral "verde".
-  // Simplificación honesta: la etapa con salud 'rojo' de menor pct; si no hay
-  // rojas, la 'ambar' de menor pct. Si todo verde o sin datos → null.
+  // Cuello de botella: solo etapas con fuente ok y muestra suficiente
+  // (las sin_datos ya quedan excluidas porque su salud es 'sin_datos').
   const rojas = etapas.filter((e) => e.salud === 'rojo');
   const ambars = etapas.filter((e) => e.salud === 'ambar');
   const pool = rojas.length > 0 ? rojas : ambars;

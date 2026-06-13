@@ -20,6 +20,7 @@ import {
   type FunnelMes,
   type ResumenComparativo,
 } from '@/lib/queries';
+import { getDataSources, sourcesToMap } from '@/lib/sources';
 import { ayerEnTijuana, primerDiaDelMesDeFecha, diasAntes } from '@/lib/date-utils';
 import { DashboardHeader } from '../_components/DashboardHeader';
 import { DashboardTabs } from '../_components/DashboardTabs';
@@ -90,8 +91,8 @@ function construirAlertas(
     });
   }
 
-  // ── No-show en cohortes maduras ──
-  if (maduras.total_j1 > 0) {
+  // ── No-show en cohortes maduras ── (guardia Fase 7: n >= 3)
+  if (maduras.total_j1 >= 3) {
     const noShow = ((maduras.total_j1 - maduras.asistencias) / maduras.total_j1) * 100;
     if (noShow > 35) {
       alertas.push({
@@ -176,8 +177,9 @@ export default async function GeneralPage() {
   let errorMsg: string | null = null;
 
   try {
+    const sourceMap = sourcesToMap(await getDataSources());
     const [f, m, p, rev, comp] = await Promise.all([
-      getFunnelEtapas(mesInicio, ayerReal),
+      getFunnelEtapas(mesInicio, ayerReal, sourceMap),
       getResumenComercialMaduras(),
       getDistribucionPipeline(),
       getRevenuePeriod(mesInicio, ayerReal),
