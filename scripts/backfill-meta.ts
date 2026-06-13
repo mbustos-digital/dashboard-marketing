@@ -1,15 +1,17 @@
 // =============================================================================
-// Backfill de Meta Ads: carga N días históricos
+// Backfill histórico de Meta Insights (Implementación v2, Fase 2)
 // =============================================================================
-// Uso (default 90 días):
-//   npx tsx scripts/backfill-meta.ts
+// Uso:
+//   npx tsx scripts/backfill-meta.ts --desde=2025-12-08
+//   npx tsx scripts/backfill-meta.ts --desde=2025-12-08 --hasta=2026-01-31
 //
-// Días custom:
-//   npx tsx scripts/backfill-meta.ts 30
-//
-// Lee .env.local automáticamente (sin necesidad de exportar variables).
-// Itera de "ayer en TJ" hacia atrás N días, llama Meta por cada día y upsertea.
-// Si un día falla, loggea el error y sigue con el siguiente — no aborta.
+// - Reusa fetchMetaInsights / parseInsightsToMetrics / upsertMetrics (no
+//   duplica lógica). Idempotente: upsertMetrics hace delete+insert por fecha.
+// - Loop en orden cronológico, pausa de 2500 ms entre días (rate limit).
+// - MetaRateLimitError → espera 60 s y reintenta el MISMO día (máx 3),
+//   después aborta con resumen.
+// - Días sin campañas activas devuelven 0 insights: loguear y seguir.
+// - NO toca adset_budget_daily (Meta no expone histórico de presupuestos).
 // =============================================================================
 
 import { config } from 'dotenv';
@@ -22,46 +24,100 @@ import {
   fetchMetaInsights,
   parseInsightsToMetrics,
   upsertMetrics,
+  MetaRateLimitError,
 } from '../lib/meta-ads';
-import { ayerEnTijuana, diasAntes } from '../lib/date-utils';
+import { ayerEnTijuana, diasAntes, esFechaValida } from '../lib/date-utils';
 
-const DAYS = Math.max(1, Number(process.argv[2] ?? 90));
-const PAUSE_MS = 250; // pausa pequeña entre días para no martillar Meta
+const PAUSA_ENTRE_DIAS_MS = 2500;
+const ESPERA_RATE_LIMIT_MS = 60_000;
+const MAX_REINTENTOS_DIA = 3;
 
-async function main() {
-  const fechaFinal = ayerEnTijuana();
-  console.log(`▶ Backfill Meta Ads: ${DAYS} días terminando en ${fechaFinal}`);
-  console.log(`  Ad Account: ${process.env.META_AD_ACCOUNT_ID}`);
-  console.log(`  API: ${process.env.META_API_VERSION}`);
-  console.log('');
+function sleep(ms: number): Promise<void> {
+  return new Promise((res) => setTimeout(res, ms));
+}
 
-  let okCount = 0;
-  let failCount = 0;
-  const tStart = Date.now();
+function parseFlag(name: string): string | null {
+  const arg = process.argv.find((a) => a.startsWith(`--${name}=`));
+  return arg ? arg.split('=')[1] : null;
+}
 
-  for (let i = 0; i < DAYS; i++) {
-    const fecha = diasAntes(fechaFinal, i);
+async function procesarDia(fecha: string): Promise<number> {
+  for (let intento = 1; intento <= MAX_REINTENTOS_DIA; intento++) {
     try {
       const insights = await fetchMetaInsights(fecha);
+      if (insights.length === 0) {
+        console.log(`  ${fecha}: sin campañas activas (0 insights)`);
+        return 0;
+      }
       const metrics = parseInsightsToMetrics(insights, fecha);
-      const inserted = await upsertMetrics(metrics);
-      console.log(`  ✅ ${fecha}: ${insights.length} insights → ${inserted} filas`);
-      okCount++;
+      return await upsertMetrics(metrics);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error(`  ❌ ${fecha}: ${msg}`);
-      failCount++;
+      if (err instanceof MetaRateLimitError && intento < MAX_REINTENTOS_DIA) {
+        console.warn(
+          `  ${fecha}: rate limit (intento ${intento}/${MAX_REINTENTOS_DIA}), esperando 60 s...`,
+        );
+        await sleep(ESPERA_RATE_LIMIT_MS);
+        continue;
+      }
+      throw err;
     }
-    if (i < DAYS - 1) await new Promise((r) => setTimeout(r, PAUSE_MS));
+  }
+  return 0;
+}
+
+async function main() {
+  const desde = parseFlag('desde');
+  const hasta = parseFlag('hasta') ?? ayerEnTijuana();
+
+  if (!desde || !esFechaValida(desde)) {
+    console.error('Falta --desde=YYYY-MM-DD (válida)');
+    process.exit(1);
+  }
+  if (!esFechaValida(hasta) || desde > hasta) {
+    console.error(`Rango inválido: ${desde} → ${hasta}`);
+    process.exit(1);
   }
 
-  const ms = Date.now() - tStart;
+  console.log(`▶ Backfill Meta Insights: ${desde} → ${hasta}`);
+  console.log(`  Ad Account: ${process.env.META_AD_ACCOUNT_ID}`);
   console.log('');
-  console.log(`Resumen: ${okCount} OK · ${failCount} fail · ${(ms / 1000).toFixed(1)}s`);
-  if (failCount > 0) process.exit(1);
+
+  let fecha = desde;
+  let dias = 0;
+  let filas = 0;
+  const errores: Array<{ fecha: string; error: string }> = [];
+
+  while (fecha <= hasta) {
+    const t0 = Date.now();
+    try {
+      const inserted = await procesarDia(fecha);
+      filas += inserted;
+      if (inserted > 0) {
+        console.log(`  ${fecha}: ${inserted} filas (${Date.now() - t0} ms)`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`  ${fecha}: ERROR — ${msg}`);
+      errores.push({ fecha, error: msg });
+      if (err instanceof MetaRateLimitError) {
+        console.error('Rate limit persistente — abortando con resumen.');
+        break;
+      }
+    }
+    dias++;
+    fecha = diasAntes(fecha, -1); // avanza un día
+    if (fecha <= hasta) await sleep(PAUSA_ENTRE_DIAS_MS);
+  }
+
+  console.log('\n──────── RESUMEN ────────');
+  console.log(`Días procesados : ${dias}`);
+  console.log(`Filas totales   : ${filas}`);
+  console.log(`Días con error  : ${errores.length}`);
+  for (const e of errores) console.log(`  - ${e.fecha}: ${e.error}`);
+  process.exit(errores.length > 0 ? 1 : 0);
 }
 
 main().catch((err) => {
-  console.error('Error fatal:', err);
+  console.error('Fatal:', err);
   process.exit(1);
 });
