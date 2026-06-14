@@ -10,6 +10,7 @@ import { TIPO_DE_CAMBIO_USD_MXN, DIAS_GRACIA_J2 } from './config';
 import { getCashCollectedPeriodo, getOutstandingTotal, getCuotasPendientes } from './pagos';
 import { listReviewPendientes } from './review-queue';
 import { getSettingNum, getSetting } from './settings';
+import { lunesDeFecha } from './date-utils';
 import {
   contarVslPlays,
   estadoMadurezLead,
@@ -805,13 +806,18 @@ export async function listCACMensual(limit = 12): Promise<CACMensualEntry[]> {
 // Funnel de 6 etapas (Prompt 8B) — conversiones entre etapas en un rango
 // ─────────────────────────────────────────────────────────────────────────────
 
+export type BloqueFunnel = 'marketing' | 'puente' | 'comercial';
+
 export type FunnelEtapa = {
   key: string;
   label: string;
+  bloque: BloqueFunnel;        // marketing / puente (cruza sistemas) / comercial
   entrada: number;
   salida: number;
   pct: number | null;          // salida/entrada * 100, null si entrada=0
   benchmark: string;           // texto del tooltip de info
+  // Umbrales para el bullet bar (bandas) y la salud. max = tope de la escala.
+  umbral: { rojo: number; ambar: number; max: number };
   salud: 'verde' | 'ambar' | 'rojo' | 'sin_datos';
   fuenteKey: string | null;    // qué fuente alimenta esta etapa (null = carga manual)
   fuente_pendiente: boolean;   // true si su fuente está off (Fase 7) → no es 0%, no existe
@@ -837,7 +843,7 @@ export async function getFunnelEtapas(
     getMarketingWindow(start, end),
     supabase
       .from('leads')
-      .select('asistio_j1, calificado, cerro, fecha_junta_1')
+      .select('asistio_j1, calificado, estado_lead, fecha_junta_1')
       .gte('fecha_junta_1', start)
       .lte('fecha_junta_1', end),
   ]);
@@ -848,79 +854,87 @@ export async function getFunnelEtapas(
   const total_j1 = rows.length;
   const asistencias = rows.filter((r) => r.asistio_j1 === true).length;
   const limpias = rows.filter((r) => r.asistio_j1 === true && r.calificado === true).length;
-  const cierres = rows.filter((r) => r.cerro === true).length;
+  // Cierre = estado_lead 'ganado' (Fase 8), no el viejo booleano cerro.
+  const cierres = rows.filter((r) => r.estado_lead === 'ganado').length;
 
   const pctDe = (salida: number, entrada: number): number | null =>
     entrada > 0 ? (salida / entrada) * 100 : null;
 
-  // Umbrales de salud por etapa (benchmarks del mentor + sentido común)
-  const saludDe = (key: string, pct: number | null): FunnelEtapa['salud'] => {
-    if (pct === null) return 'sin_datos';
-    switch (key) {
-      case 'imp_landing':   // CTR-like: 0.9-1.5% promedio FB
-        return pct < 0.5 ? 'rojo' : pct < 0.9 ? 'ambar' : 'verde';
-      case 'landing_vsl':   // <20% flojo
-        return pct < 20 ? 'rojo' : pct < 35 ? 'ambar' : 'verde';
-      case 'vsl_agenda':
-        return pct < 1 ? 'rojo' : pct < 3 ? 'ambar' : 'verde';
-      case 'agenda_asistio': // no-show >35% es problema → asistencia <65% rojo
-        return pct < 65 ? 'rojo' : pct < 75 ? 'ambar' : 'verde';
-      case 'asistio_calificado':
-        return pct < 40 ? 'rojo' : pct < 60 ? 'ambar' : 'verde';
-      case 'calificado_cierre': // ratio joya: <20 problema, 20-30 mixto, ≥30 sano
-        return pct < 20 ? 'rojo' : pct < 30 ? 'ambar' : 'verde';
-      default:
-        return 'ambar';
-    }
-  };
-
+  // Definición en dos bloques + fila puente (Fase 15). Cada etapa lleva su
+  // umbral {rojo, ambar, max} — del que se derivan la salud y las bandas del
+  // bullet bar.
   const defs: Array<Omit<FunnelEtapa, 'pct' | 'salud' | 'fuente_pendiente' | 'muestra_chica'>> = [
+    // ── BLOQUE MARKETING (meta_insights / vsl_panda) ──
     {
-      key: 'imp_landing',
-      label: 'Impresión → Landing',
+      key: 'imp_click',
+      label: 'Impresión → Click',
+      bloque: 'marketing',
       entrada: mkt.impressions,
+      salida: mkt.link_clicks, // CTR de LINK (inline_link_clicks), no clicks totales
+      benchmark: 'CTR de link 0.9–1.5% para B2B en MX. <0.5% bajo, >1.5% fuerte. Es link_clicks, no clicks totales.',
+      umbral: { rojo: 0.5, ambar: 0.9, max: 3 },
+      fuenteKey: 'meta_insights',
+    },
+    {
+      key: 'click_landing',
+      label: 'Click → Landing',
+      bloque: 'marketing',
+      entrada: mkt.link_clicks,
       salida: mkt.landing_page_views,
-      benchmark: 'CTR promedio de Facebook 0.9–1.5%. <0.5% malo, >1.5% fuerte.',
+      benchmark: 'De los que clickean, cuántos cargan la landing. Bajo = la página tarda o pierde gente al entrar.',
+      umbral: { rojo: 50, ambar: 70, max: 100 },
       fuenteKey: 'meta_insights',
     },
     {
       key: 'landing_vsl',
       label: 'Landing → VSL',
+      bloque: 'marketing',
       entrada: mkt.landing_page_views,
       salida: mkt.vsl_views ?? 0,
       benchmark: 'Referencia interna: <20% es flojo. Comparalo contra tu propio número mes a mes.',
+      umbral: { rojo: 20, ambar: 35, max: 100 },
       fuenteKey: 'vsl_panda',
     },
+    // ── FILA PUENTE (cruza dos sistemas de medición) ──
     {
       key: 'vsl_agenda',
       label: 'VSL → Agenda',
+      bloque: 'puente',
       entrada: mkt.vsl_views ?? 0,
       salida: mkt.agendamientos,
-      benchmark: 'Referencia interna: compará mes a mes. Subirlo = mejor oferta/CTA del VSL.',
+      benchmark: 'Cruza dos sistemas de medición (Panda → Calendly): tomalo como tendencia, no como número exacto. Subirlo = mejor oferta/CTA del VSL.',
+      umbral: { rojo: 1, ambar: 3, max: 10 },
       fuenteKey: 'vsl_panda',
     },
+    // ── BLOQUE COMERCIAL (calendly + carga manual) ──
     {
       key: 'agenda_asistio',
       label: 'Agenda → Asistió J1',
+      bloque: 'comercial',
       entrada: total_j1,
       salida: asistencias,
       benchmark: 'No-show >35% (asistencia <65%) sugiere problema de recordatorios o calificación previa.',
+      umbral: { rojo: 65, ambar: 75, max: 100 },
       fuenteKey: 'calendly',
     },
     {
       key: 'asistio_calificado',
-      label: 'Asistió → Calificado',
+      label: 'Asistió → Limpia',
+      bloque: 'comercial',
       entrada: asistencias,
       salida: limpias,
       benchmark: 'Mide la calidad del lead que llega a J1. Bajo = atraes al perfil equivocado.',
+      umbral: { rojo: 40, ambar: 60, max: 100 },
       fuenteKey: null, // carga manual — siempre "disponible"
     },
     {
       key: 'calificado_cierre',
-      label: 'Calificado → Cierre',
+      label: 'Limpia → Cierre',
+      bloque: 'comercial',
       entrada: limpias,
       salida: cierres,
       benchmark: 'Ratio joya. ≥30% sano, 20-30% mixto, <20% problema de venta (J2, oferta, objeciones).',
+      umbral: { rojo: 20, ambar: 30, max: 100 },
       fuenteKey: null,
     },
   ];
@@ -932,20 +946,130 @@ export async function getFunnelEtapas(
     // Muestra chica → % no confiable, se trata como sin_datos para el cuello
     const muestra_chica = d.entrada < MIN_MUESTRA;
     const salud: FunnelEtapa['salud'] =
-      fuente_pendiente || muestra_chica ? 'sin_datos' : saludDe(d.key, pct);
+      fuente_pendiente || muestra_chica || pct === null
+        ? 'sin_datos'
+        : pct < d.umbral.rojo
+        ? 'rojo'
+        : pct < d.umbral.ambar
+        ? 'ambar'
+        : 'verde';
     return { ...d, pct, salud, fuente_pendiente, muestra_chica };
   });
 
   // Cuello de botella: solo etapas con fuente ok y muestra suficiente
   // (las sin_datos ya quedan excluidas porque su salud es 'sin_datos').
+  // Tiebreak por SEVERIDAD normalizada contra el propio umbral — así no
+  // gana siempre la etapa de escala chica (el CTR ~1%) frente a una de
+  // escala grande (el cierre ~30%).
   const rojas = etapas.filter((e) => e.salud === 'rojo');
   const ambars = etapas.filter((e) => e.salud === 'ambar');
   const pool = rojas.length > 0 ? rojas : ambars;
+  const severidad = (e: FunnelEtapa): number => {
+    const ref = rojas.length > 0 ? e.umbral.rojo : e.umbral.ambar;
+    return ref > 0 ? (ref - (e.pct ?? 0)) / ref : 0; // mayor = peor
+  };
   const cuello = pool.length > 0
-    ? pool.reduce((min, e) => ((e.pct ?? 0) < (min.pct ?? 0) ? e : min))
+    ? pool.reduce((peor, e) => (severidad(e) > severidad(peor) ? e : peor))
     : null;
 
   return { etapas, cuelloKey: cuello?.key ?? null };
+}
+
+// =============================================================================
+// FUNNEL — serie semanal por etapa (Fase 15)
+// =============================================================================
+// Por cada etapa, el pct de las últimas `semanas` semanas. Semanas sin
+// denominador devuelven null (no 0) — una sparkline honesta.
+// =============================================================================
+
+export type FunnelSeries = Record<string, Array<number | null>>;
+
+export async function getFunnelSeries(
+  end: string = new Date().toISOString().slice(0, 10),
+  semanas = 12,
+): Promise<FunnelSeries> {
+  const supabase = getSupabaseServer();
+
+  // Semanas (lunes) más viejas → más nuevas
+  const ultimoLunes = lunesDeFecha(end);
+  const inicios: string[] = [];
+  for (let i = semanas - 1; i >= 0; i--) inicios.push(restarDiasISO(ultimoLunes, i * 7));
+  const rangoInicio = inicios[0];
+  const rangoFin = restarDiasISO(ultimoLunes, -6); // domingo de la última semana
+
+  const [metaRes, pandaRes, agendaRes, j1Res] = await Promise.all([
+    supabase
+      .from('marketing_metrics_daily')
+      .select('fecha, impressions, link_clicks, landing_page_views')
+      .eq('plataforma', 'meta')
+      .gte('fecha', rangoInicio)
+      .lte('fecha', rangoFin),
+    supabase
+      .from('marketing_metrics_daily')
+      .select('fecha, video_plays')
+      .eq('plataforma', 'panda')
+      .gte('fecha', rangoInicio)
+      .lte('fecha', rangoFin),
+    supabase
+      .from('leads')
+      .select('fecha_agenda')
+      .gte('fecha_agenda', rangoInicio)
+      .lte('fecha_agenda', rangoFin),
+    supabase
+      .from('leads')
+      .select('fecha_junta_1, asistio_j1, calificado, estado_lead')
+      .gte('fecha_junta_1', rangoInicio)
+      .lte('fecha_junta_1', rangoFin),
+  ]);
+
+  for (const r of [metaRes, pandaRes, agendaRes, j1Res]) {
+    if (r.error) throw new Error(`getFunnelSeries falló: ${r.error.message}`);
+  }
+
+  // Índice de semana de una fecha = lunes de esa fecha
+  const semanaDe = (fecha: string): string => lunesDeFecha(fecha);
+
+  // Acumuladores por semana
+  type Acc = { imp: number; clk: number; land: number; vsl: number; agenda: number; j1: number; asis: number; lmp: number; cie: number };
+  const porSemana = new Map<string, Acc>();
+  for (const s of inicios) porSemana.set(s, { imp: 0, clk: 0, land: 0, vsl: 0, agenda: 0, j1: 0, asis: 0, lmp: 0, cie: 0 });
+  const add = (semana: string, f: (a: Acc) => void) => {
+    const a = porSemana.get(semana);
+    if (a) f(a);
+  };
+
+  for (const r of (metaRes.data ?? []) as Array<{ fecha: string; impressions: number | null; link_clicks: number | null; landing_page_views: number | null }>) {
+    add(semanaDe(r.fecha), (a) => { a.imp += r.impressions ?? 0; a.clk += r.link_clicks ?? 0; a.land += r.landing_page_views ?? 0; });
+  }
+  for (const r of (pandaRes.data ?? []) as Array<{ fecha: string; video_plays: number | null }>) {
+    add(semanaDe(r.fecha), (a) => { a.vsl += r.video_plays ?? 0; });
+  }
+  for (const r of (agendaRes.data ?? []) as Array<{ fecha_agenda: string | null }>) {
+    if (r.fecha_agenda) add(semanaDe(r.fecha_agenda), (a) => { a.agenda += 1; });
+  }
+  for (const r of (j1Res.data ?? []) as Array<{ fecha_junta_1: string | null; asistio_j1: boolean | null; calificado: boolean | null; estado_lead: string }>) {
+    if (!r.fecha_junta_1) continue;
+    add(semanaDe(r.fecha_junta_1), (a) => {
+      a.j1 += 1;
+      if (r.asistio_j1 === true) a.asis += 1;
+      if (r.asistio_j1 === true && r.calificado === true) a.lmp += 1;
+      if (r.estado_lead === 'ganado') a.cie += 1;
+    });
+  }
+
+  const ratio = (num: number, den: number): number | null => (den > 0 ? (num / den) * 100 : null);
+  const serie = (f: (a: Acc) => number | null): Array<number | null> =>
+    inicios.map((s) => f(porSemana.get(s)!));
+
+  return {
+    imp_click: serie((a) => ratio(a.clk, a.imp)),
+    click_landing: serie((a) => ratio(a.land, a.clk)),
+    landing_vsl: serie((a) => ratio(a.vsl, a.land)),
+    vsl_agenda: serie((a) => ratio(a.agenda, a.vsl)),
+    agenda_asistio: serie((a) => ratio(a.asis, a.j1)),
+    asistio_calificado: serie((a) => ratio(a.lmp, a.asis)),
+    calificado_cierre: serie((a) => ratio(a.cie, a.lmp)),
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

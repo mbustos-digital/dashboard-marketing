@@ -113,8 +113,10 @@ function construirAlertas(
 
   // ── Etapas de MARKETING del mes (8E: diagnóstico por etapa) ──
   const diagnosticos: Record<string, string> = {
-    imp_landing:
-      'Pocos clicks en el anuncio. Revisá el creativo y la segmentación.',
+    imp_click:
+      'CTR de link bajo: pocos clicks por impresión. Revisá el creativo, el copy y la segmentación.',
+    click_landing:
+      'Clickean pero no cargan la landing. Revisá velocidad de la página y que el anuncio prometa lo mismo que muestra.',
     landing_vsl:
       'Entran a la landing pero no ven el VSL. Revisá: ¿el video se ve al entrar sin scrollear? ¿la página carga rápido? ¿el anuncio promete lo mismo que muestra la landing?',
     vsl_agenda:
