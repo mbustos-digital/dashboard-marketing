@@ -19,6 +19,8 @@ import {
   getJuntasProximas,
   getColaDeAccion,
   getObjetivoProgreso,
+  getFatigaAdsets,
+  getTramoJ1J2Reciente,
   type ResumenComercialMaduras,
   type DistribucionPipeline,
   type FunnelMes,
@@ -27,10 +29,13 @@ import {
   type JuntaProxima,
   type ColaItem,
   type ObjetivoProgreso,
+  type AdsetFatiga,
+  type TramoJ1J2,
 } from '@/lib/queries';
+import { DIAS_J1_J2_ALERTA } from '@/lib/config';
 import { getDataSources, sourcesToMap } from '@/lib/sources';
 import { getCuotasPendientes, type CuotaPendiente } from '@/lib/pagos';
-import { ayerEnTijuana, hoyEnTijuana, primerDiaDelMesDeFecha, diasAntes } from '@/lib/date-utils';
+import { ayerEnTijuana, hoyEnTijuana, primerDiaDelMesDeFecha } from '@/lib/date-utils';
 import { DashboardHeader } from '../_components/DashboardHeader';
 import { DashboardTabs } from '../_components/DashboardTabs';
 import { PendienteActions } from '../leads/PendienteActions';
@@ -91,8 +96,32 @@ function construirAlertas(
   pipeline: DistribucionPipeline,
   cuotas: { vencidas: CuotaPendiente[]; porVencer: CuotaPendiente[] },
   pendientes: Pendientes,
+  fatiga: AdsetFatiga[],
+  tramoJ1J2: TramoJ1J2,
 ): Alerta[] {
   const alertas: Alerta[] = [];
+
+  // ── Fatiga de creativo por adset (ámbar) — Fase 16 ──
+  for (const a of fatiga) {
+    alertas.push({
+      nivel: 'ambar',
+      titulo: `Posible fatiga de creativo en ${a.adset_name}`,
+      detalle: `Frecuencia 7d ${a.frequency_7d.toFixed(1)} y el costo por lead subió (${fmtUSD(a.cpl_7d_usd)} vs ${fmtUSD(a.cpl_28d_usd)} a 28 días). Rotá el creativo.`,
+      href: '/',
+      hrefLabel: 'Ver Marketing',
+    });
+  }
+
+  // ── Tramo J1 → J2 lento (ámbar) — Fase 16 (guardia: n >= 3) ──
+  if (tramoJ1J2.n >= 3 && tramoJ1J2.promedio !== null && tramoJ1J2.promedio > DIAS_J1_J2_ALERTA) {
+    alertas.push({
+      nivel: 'ambar',
+      titulo: `Los deals se enfrían entre J1 y J2 (promedio ${tramoJ1J2.promedio.toFixed(1)} días)`,
+      detalle: 'Cuanto más tarda la J2, más cae la intención. Agendá la J2 en la misma J1, en vivo.',
+      href: '/comercial',
+      hrefLabel: 'Ver Comercial',
+    });
+  }
 
   // ── Pendientes de marcar (Fase 9): ROJA, arriba de TODO ──
   // Si hay datos manuales sin cargar, el resto del tablero lee datos viejos.
@@ -221,9 +250,6 @@ function construirAlertas(
 export default async function GeneralPage() {
   const ayerReal = ayerEnTijuana();
   const mesInicio = primerDiaDelMesDeFecha(ayerReal);
-  // Mes anterior: del 1 del mes pasado al día antes del 1 de este mes
-  const mesAnteriorFin = diasAntes(mesInicio, 1);
-  const mesAnteriorInicio = primerDiaDelMesDeFecha(mesAnteriorFin);
 
   let funnel: FunnelMes | null = null;
   let maduras: ResumenComercialMaduras | null = null;
@@ -237,13 +263,15 @@ export default async function GeneralPage() {
   let cola: ColaItem[] = [];
   let objetivo: ObjetivoProgreso | null = null;
   let comparativo: ResumenComparativo | null = null;
+  let fatiga: AdsetFatiga[] = [];
+  let tramoJ1J2: TramoJ1J2 = { promedio: null, n: 0 };
   let errorMsg: string | null = null;
 
   const hoyReal = hoyEnTijuana();
 
   try {
     const sourceMap = sourcesToMap(await getDataSources());
-    const [f, m, p, cuo, pend, jun, col, obj, comp] = await Promise.all([
+    const [f, m, p, cuo, pend, jun, col, obj, comp, fat, tj] = await Promise.all([
       getFunnelEtapas(mesInicio, ayerReal, sourceMap),
       getResumenComercialMaduras(),
       getDistribucionPipeline(),
@@ -252,7 +280,9 @@ export default async function GeneralPage() {
       getJuntasProximas(hoyReal, 2),
       getColaDeAccion(hoyReal),
       getObjetivoProgreso(hoyReal),
-      getResumenComparativo(mesInicio, ayerReal, mesAnteriorInicio, mesAnteriorFin),
+      getResumenComparativo(ayerReal),
+      getFatigaAdsets(hoyReal),
+      getTramoJ1J2Reciente(hoyReal, 60),
     ]);
     funnel = f;
     maduras = m;
@@ -263,6 +293,8 @@ export default async function GeneralPage() {
     cola = col;
     objetivo = obj;
     comparativo = comp;
+    fatiga = fat;
+    tramoJ1J2 = tj;
   } catch (err) {
     errorMsg = err instanceof Error ? err.message : String(err);
   }
@@ -286,7 +318,7 @@ export default async function GeneralPage() {
         </div>
       ) : (
         <GeneralContent
-          alertas={construirAlertas(funnel, maduras, pipeline, cuotas, pendientes)}
+          alertas={construirAlertas(funnel, maduras, pipeline, cuotas, pendientes, fatiga, tramoJ1J2)}
           juntas={juntas}
           cola={cola}
           objetivo={objetivo}
@@ -719,26 +751,26 @@ function ResumenMes({ comparativo }: { comparativo: ResumenComparativo }) {
   const items = [
     {
       label: 'Inversión',
-      valor: fmtUSD(comparativo.inversion_usd.actual),
-      anterior: fmtUSD(comparativo.inversion_usd.anterior),
+      m: comparativo.inversion_usd,
+      fmt: (n: number) => fmtUSD(n),
       nodo: <Tendencia actual={comparativo.inversion_usd.actual} anterior={comparativo.inversion_usd.anterior} invertir />,
     },
     {
       label: 'Agendas',
-      valor: fmtNumber(comparativo.agendas.actual),
-      anterior: fmtNumber(comparativo.agendas.anterior),
+      m: comparativo.agendas,
+      fmt: (n: number) => fmtNumber(n),
       nodo: <Tendencia actual={comparativo.agendas.actual} anterior={comparativo.agendas.anterior} />,
     },
     {
       label: 'Cash collected',
-      valor: fmtUSD(comparativo.cash_usd.actual),
-      anterior: fmtUSD(comparativo.cash_usd.anterior),
+      m: comparativo.cash_usd,
+      fmt: (n: number) => fmtUSD(n),
       nodo: <Tendencia actual={comparativo.cash_usd.actual} anterior={comparativo.cash_usd.anterior} />,
     },
     {
       label: 'Cierres',
-      valor: fmtNumber(comparativo.cierres.actual),
-      anterior: fmtNumber(comparativo.cierres.anterior),
+      m: comparativo.cierres,
+      fmt: (n: number) => fmtNumber(n),
       nodo: <Tendencia actual={comparativo.cierres.actual} anterior={comparativo.cierres.anterior} />,
     },
   ];
@@ -755,7 +787,7 @@ function ResumenMes({ comparativo }: { comparativo: ResumenComparativo }) {
         Resumen del mes
       </h2>
       <p className="text-base mb-5" style={{ color: 'var(--text-dim)' }}>
-        Mes en curso vs mes anterior completo.
+        Mes en curso vs {comparativo.etiqueta_anterior} (mismo rango de días, comparación justa).
       </p>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {items.map((item) => (
@@ -768,10 +800,13 @@ function ResumenMes({ comparativo }: { comparativo: ResumenComparativo }) {
               {item.label}
             </div>
             <div className="text-[26px] font-semibold tabular-nums flex items-center gap-2">
-              {item.valor} {item.nodo}
+              {item.fmt(item.m.actual)} {item.nodo}
             </div>
             <div className="text-sm mt-1" style={{ color: 'var(--text-pending)' }}>
-              mes anterior: {item.anterior}
+              {comparativo.etiqueta_anterior}: {item.fmt(item.m.anterior)}
+            </div>
+            <div className="text-sm" style={{ color: 'var(--text-pending)' }}>
+              proyección fin de mes: {item.fmt(item.m.proyeccion)}
             </div>
           </div>
         ))}

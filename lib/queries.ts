@@ -1172,31 +1172,86 @@ export async function getTramosSCL(): Promise<TramosSCL> {
 // Resumen comparativo mes actual vs anterior (Prompt 8A) — 4 números + tendencia
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Métrica MTD: valor actual (1→hoy), mismo período del mes anterior, y
+// proyección de cierre de mes (ritmo diario × días del mes).
+export type MetricaMTD = { actual: number; anterior: number; proyeccion: number };
+
 export type ResumenComparativo = {
-  inversion_usd: { actual: number; anterior: number };
-  agendas: { actual: number; anterior: number };
-  cash_usd: { actual: number; anterior: number };
-  cierres: { actual: number; anterior: number };
+  inversion_usd: MetricaMTD;
+  agendas: MetricaMTD;
+  cash_usd: MetricaMTD;
+  cierres: MetricaMTD;
+  etiqueta_anterior: string;   // "mismo período de mayo"
 };
 
-export async function getResumenComparativo(
-  mesActualInicio: string,
-  hoy: string,
-  mesAnteriorInicio: string,
-  mesAnteriorFin: string,
-): Promise<ResumenComparativo> {
-  const [mktAct, mktAnt, revAct, revAnt] = await Promise.all([
-    getMarketingWindow(mesActualInicio, hoy),
-    getMarketingWindow(mesAnteriorInicio, mesAnteriorFin),
-    getRevenuePeriod(mesActualInicio, hoy),
-    getRevenuePeriod(mesAnteriorInicio, mesAnteriorFin),
-  ]);
+export type CompareMTD = {
+  actualInicio: string;
+  actualFin: string;       // = hoy
+  anteriorInicio: string;
+  anteriorFin: string;     // mismo día del mes anterior (capeado al fin de mes)
+  etiqueta: string;        // "mismo período de mayo"
+  diaDelMes: number;
+  diasEnMesActual: number;
+};
+
+/**
+ * Comparación justa MTD (Fase 16): contra el MISMO rango de días del mes
+ * anterior (del 1 al día de hoy), no contra el mes anterior completo.
+ */
+export function compareMTD(hoy: string): CompareMTD {
+  const [y, m, d] = hoy.split('-').map(Number);
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  const actualInicio = `${y}-${p2(m)}-01`;
+
+  // Mes anterior
+  const prev = new Date(Date.UTC(y, m - 2, 1)); // m-2 = mes anterior (0-based)
+  const py = prev.getUTCFullYear();
+  const pm = prev.getUTCMonth() + 1;
+  const anteriorInicio = `${py}-${p2(pm)}-01`;
+  const ultimoDiaPrev = new Date(Date.UTC(py, pm, 0)).getUTCDate();
+  const diaCap = Math.min(d, ultimoDiaPrev);
+  const anteriorFin = `${py}-${p2(pm)}-${p2(diaCap)}`;
+
+  const nombreMes = new Intl.DateTimeFormat('es-MX', { month: 'long', timeZone: 'UTC' })
+    .format(new Date(Date.UTC(py, pm - 1, 1)));
+  const diasEnMesActual = new Date(Date.UTC(y, m, 0)).getUTCDate();
 
   return {
-    inversion_usd: { actual: mktAct.spend_usd, anterior: mktAnt.spend_usd },
-    agendas: { actual: mktAct.agendamientos, anterior: mktAnt.agendamientos },
-    cash_usd: { actual: revAct.cash_collected_usd, anterior: revAnt.cash_collected_usd },
-    cierres: { actual: revAct.cierres_en_periodo, anterior: revAnt.cierres_en_periodo },
+    actualInicio,
+    actualFin: hoy,
+    anteriorInicio,
+    anteriorFin,
+    etiqueta: `mismo período de ${nombreMes}`,
+    diaDelMes: d,
+    diasEnMesActual,
+  };
+}
+
+export async function getResumenComparativo(hoy: string): Promise<ResumenComparativo> {
+  const c = compareMTD(hoy);
+  const [mktAct, mktAnt, revAct, revAnt] = await Promise.all([
+    getMarketingWindow(c.actualInicio, c.actualFin),
+    getMarketingWindow(c.anteriorInicio, c.anteriorFin),
+    getRevenuePeriod(c.actualInicio, c.actualFin),
+    getRevenuePeriod(c.anteriorInicio, c.anteriorFin),
+  ]);
+
+  // Proyección a fin de mes: ritmo diario MTD × días del mes.
+  const proy = (actual: number) =>
+    c.diaDelMes > 0 ? (actual / c.diaDelMes) * c.diasEnMesActual : actual;
+
+  const mtd = (actual: number, anterior: number): MetricaMTD => ({
+    actual,
+    anterior,
+    proyeccion: proy(actual),
+  });
+
+  return {
+    inversion_usd: mtd(mktAct.spend_usd, mktAnt.spend_usd),
+    agendas: mtd(mktAct.agendamientos, mktAnt.agendamientos),
+    cash_usd: mtd(revAct.cash_collected_usd, revAnt.cash_collected_usd),
+    cierres: mtd(revAct.cierres_en_periodo, revAnt.cierres_en_periodo),
+    etiqueta_anterior: c.etiqueta,
   };
 }
 
@@ -1728,5 +1783,208 @@ export async function getObjetivoProgreso(
     cierres_30d,
     semanas_estimadas,
     cumplido,
+  };
+}
+
+// =============================================================================
+// REGLAS NUEVAS DEL SEMÁFORO (Fase 16)
+// =============================================================================
+
+export type AdsetFatiga = {
+  adset_name: string;
+  frequency_7d: number;
+  cpl_7d_usd: number;
+  cpl_28d_usd: number;
+};
+
+/**
+ * Adsets con posible fatiga de creativo: spend 7d > USD 50, frequency media 7d
+ * > 3.5 Y CPL 7d > 1.5 × CPL 28d. (frequency y leads_count ya están por fila.)
+ */
+export async function getFatigaAdsets(
+  hoy: string = new Date().toISOString().slice(0, 10),
+): Promise<AdsetFatiga[]> {
+  const supabase = getSupabaseServer();
+  const d28 = restarDiasISO(hoy, 28);
+  const d7 = restarDiasISO(hoy, 7);
+  const { data, error } = await supabase
+    .from('marketing_metrics_daily')
+    .select('fecha, adset_id, adset_name, spend, frequency, leads_count')
+    .eq('plataforma', 'meta')
+    .gte('fecha', d28)
+    .lte('fecha', hoy);
+  if (error) throw new Error(`Query fatiga adsets falló: ${error.message}`);
+
+  type Row = { fecha: string; adset_id: string | null; adset_name: string | null; spend: number | null; frequency: number | null; leads_count: number | null };
+  const porAdset = new Map<string, Row[]>();
+  for (const r of (data ?? []) as Row[]) {
+    const k = r.adset_id ?? r.adset_name ?? 'sin_adset';
+    const arr = porAdset.get(k) ?? [];
+    arr.push(r);
+    porAdset.set(k, arr);
+  }
+
+  const out: AdsetFatiga[] = [];
+  for (const rows of porAdset.values()) {
+    const en7 = rows.filter((r) => r.fecha >= d7);
+    const spend7Mxn = en7.reduce((s, r) => s + Number(r.spend ?? 0), 0);
+    const spend7Usd = spend7Mxn / TIPO_DE_CAMBIO_USD_MXN;
+    if (spend7Usd <= 50) continue;
+
+    const freqVals = en7.map((r) => Number(r.frequency ?? 0)).filter((v) => v > 0);
+    const freq7 = freqVals.length > 0 ? freqVals.reduce((s, v) => s + v, 0) / freqVals.length : 0;
+    if (freq7 <= 3.5) continue;
+
+    const leads7 = en7.reduce((s, r) => s + Number(r.leads_count ?? 0), 0);
+    const spend28Mxn = rows.reduce((s, r) => s + Number(r.spend ?? 0), 0);
+    const leads28 = rows.reduce((s, r) => s + Number(r.leads_count ?? 0), 0);
+    if (leads7 === 0 || leads28 === 0) continue;
+    const cpl7 = spend7Mxn / TIPO_DE_CAMBIO_USD_MXN / leads7;
+    const cpl28 = spend28Mxn / TIPO_DE_CAMBIO_USD_MXN / leads28;
+    if (cpl7 <= 1.5 * cpl28) continue;
+
+    out.push({
+      adset_name: rows[0].adset_name ?? rows[0].adset_id ?? 'adset',
+      frequency_7d: freq7,
+      cpl_7d_usd: cpl7,
+      cpl_28d_usd: cpl28,
+    });
+  }
+  return out;
+}
+
+export type TramoJ1J2 = { promedio: number | null; n: number };
+
+/**
+ * Promedio del tramo J1 → J2 (días) sobre leads con J1 en los últimos `dias`
+ * días (default 60) y J2 cargada. Para la alerta de "deals que se enfrían".
+ */
+export async function getTramoJ1J2Reciente(
+  hoy: string = new Date().toISOString().slice(0, 10),
+  dias = 60,
+): Promise<TramoJ1J2> {
+  const supabase = getSupabaseServer();
+  const desde = restarDiasISO(hoy, dias);
+  const { data, error } = await supabase
+    .from('leads')
+    .select('fecha_junta_1, fecha_junta_2')
+    .gte('fecha_junta_1', desde)
+    .lte('fecha_junta_1', hoy)
+    .not('fecha_junta_2', 'is', null);
+  if (error) throw new Error(`Query tramo J1→J2 falló: ${error.message}`);
+
+  const difs: number[] = [];
+  for (const r of (data ?? []) as Array<{ fecha_junta_1: string | null; fecha_junta_2: string | null }>) {
+    if (!r.fecha_junta_1 || !r.fecha_junta_2) continue;
+    const [ay, am, ad] = r.fecha_junta_1.split('-').map(Number);
+    const [by, bm, bd] = r.fecha_junta_2.split('-').map(Number);
+    const d = Math.floor((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000);
+    if (d >= 0) difs.push(d);
+  }
+  return {
+    promedio: difs.length > 0 ? difs.reduce((s, v) => s + v, 0) / difs.length : null,
+    n: difs.length,
+  };
+}
+
+// =============================================================================
+// TENDENCIAS — series semanal/mensual de marketing + comercial (Fase 16)
+// =============================================================================
+
+export type FormatoSerie = 'usd' | 'num' | 'pct';
+export type SerieMetrica = { key: string; label: string; formato: FormatoSerie; valores: Array<number | null> };
+export type Tendencias = {
+  granularidad: 'semanal' | 'mensual';
+  periodos: string[];                 // etiquetas eje X
+  marketing: SerieMetrica[];
+  comercial: SerieMetrica[];
+};
+
+function nombreMesCorto(yyyy_mm_dd: string): string {
+  const [y, m] = yyyy_mm_dd.split('-').map(Number);
+  return new Intl.DateTimeFormat('es-MX', { month: 'short', year: '2-digit', timeZone: 'UTC' }).format(new Date(Date.UTC(y, m - 1, 1)));
+}
+function diaCorto(yyyy_mm_dd: string): string {
+  const [y, m, d] = yyyy_mm_dd.split('-').map(Number);
+  return new Intl.DateTimeFormat('es-MX', { day: 'numeric', month: 'short', timeZone: 'UTC' }).format(new Date(Date.UTC(y, m - 1, d)));
+}
+
+export async function getTendencias(
+  granularidad: 'semanal' | 'mensual' = 'semanal',
+  end: string = new Date().toISOString().slice(0, 10),
+): Promise<Tendencias> {
+  const supabase = getSupabaseServer();
+
+  // Períodos (viejo → nuevo)
+  const periodos: Array<{ inicio: string; fin: string; label: string }> = [];
+  if (granularidad === 'semanal') {
+    const ultimoLunes = lunesDeFecha(end);
+    for (let i = 11; i >= 0; i--) {
+      const inicio = restarDiasISO(ultimoLunes, i * 7);
+      periodos.push({ inicio, fin: restarDiasISO(inicio, -6), label: diaCorto(inicio) });
+    }
+  } else {
+    const [y, m] = end.split('-').map(Number);
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(Date.UTC(y, m - 1 - i, 1));
+      const py = d.getUTCFullYear(), pm = d.getUTCMonth() + 1;
+      const inicio = `${py}-${String(pm).padStart(2, '0')}-01`;
+      const fin = new Date(Date.UTC(py, pm, 0)).toISOString().slice(0, 10);
+      periodos.push({ inicio, fin, label: nombreMesCorto(inicio) });
+    }
+  }
+  const rangoInicio = periodos[0].inicio;
+  const rangoFin = periodos[periodos.length - 1].fin;
+  const idxDe = (fecha: string): number => {
+    for (let i = 0; i < periodos.length; i++) if (fecha >= periodos[i].inicio && fecha <= periodos[i].fin) return i;
+    return -1;
+  };
+  const n = periodos.length;
+  const z = () => Array.from({ length: n }, () => 0);
+
+  const [metaRes, leadsRes, pagosRes] = await Promise.all([
+    supabase.from('marketing_metrics_daily').select('fecha, impressions, link_clicks, landing_page_views, spend, leads_count').eq('plataforma', 'meta').gte('fecha', rangoInicio).lte('fecha', rangoFin),
+    supabase.from('leads').select('fecha_agenda, fecha_junta_1, asistio_j1, fecha_cierre, estado_lead').or(`fecha_agenda.gte.${rangoInicio},fecha_junta_1.gte.${rangoInicio},fecha_cierre.gte.${rangoInicio}`),
+    supabase.from('pagos').select('fecha_pago, monto_usd, pagado').eq('pagado', true).gte('fecha_pago', rangoInicio).lte('fecha_pago', rangoFin),
+  ]);
+  for (const r of [metaRes, leadsRes, pagosRes]) if (r.error) throw new Error(`getTendencias falló: ${r.error.message}`);
+
+  const imp = z(), clk = z(), land = z(), spendMxn = z(), leads = z();
+  for (const r of (metaRes.data ?? []) as Array<{ fecha: string; impressions: number | null; link_clicks: number | null; landing_page_views: number | null; spend: number | null; leads_count: number | null }>) {
+    const i = idxDe(r.fecha); if (i < 0) continue;
+    imp[i] += r.impressions ?? 0; clk[i] += r.link_clicks ?? 0; land[i] += r.landing_page_views ?? 0; spendMxn[i] += Number(r.spend ?? 0); leads[i] += r.leads_count ?? 0;
+  }
+  const agendas = z(), asistencias = z(), cierres = z();
+  for (const r of (leadsRes.data ?? []) as Array<{ fecha_agenda: string | null; fecha_junta_1: string | null; asistio_j1: boolean | null; fecha_cierre: string | null; estado_lead: string }>) {
+    if (r.fecha_agenda) { const i = idxDe(r.fecha_agenda); if (i >= 0) agendas[i] += 1; }
+    if (r.fecha_junta_1 && r.asistio_j1 === true) { const i = idxDe(r.fecha_junta_1); if (i >= 0) asistencias[i] += 1; }
+    if (r.fecha_cierre && r.estado_lead === 'ganado') { const i = idxDe(r.fecha_cierre); if (i >= 0) cierres[i] += 1; }
+  }
+  const cash = z();
+  for (const r of (pagosRes.data ?? []) as Array<{ fecha_pago: string | null; monto_usd: number | null }>) {
+    if (!r.fecha_pago) continue; const i = idxDe(r.fecha_pago); if (i >= 0) cash[i] += Number(r.monto_usd ?? 0);
+  }
+
+  const spendUsd = spendMxn.map((s) => s / TIPO_DE_CAMBIO_USD_MXN);
+  const ratio = (num: number[], den: number[], k = 100): Array<number | null> => num.map((v, i) => (den[i] > 0 ? (v / den[i]) * k : null));
+
+  return {
+    granularidad,
+    periodos: periodos.map((p) => p.label),
+    marketing: [
+      { key: 'impresiones', label: 'Impresiones', formato: 'num', valores: imp },
+      { key: 'landing', label: 'Visitas a la landing', formato: 'num', valores: land },
+      { key: 'ctr_link', label: 'CTR de link', formato: 'pct', valores: ratio(clk, imp) },
+      { key: 'spend', label: 'Spend (USD)', formato: 'usd', valores: spendUsd },
+      { key: 'leads', label: 'Leads', formato: 'num', valores: leads },
+      { key: 'cpl', label: 'CPL (USD)', formato: 'usd', valores: spendUsd.map((s, i) => (leads[i] > 0 ? s / leads[i] : null)) },
+    ],
+    comercial: [
+      { key: 'agendas', label: 'Agendas', formato: 'num', valores: agendas },
+      { key: 'asistencias', label: 'Asistencias a J1', formato: 'num', valores: asistencias },
+      { key: 'cierres', label: 'Cierres', formato: 'num', valores: cierres },
+      { key: 'cash', label: 'Cash collected', formato: 'usd', valores: cash },
+      { key: 'cac', label: 'CAC', formato: 'usd', valores: spendUsd.map((s, i) => (cierres[i] > 0 ? s / cierres[i] : null)) },
+    ],
   };
 }

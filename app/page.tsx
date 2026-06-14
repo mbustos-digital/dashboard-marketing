@@ -14,28 +14,26 @@
 import Link from 'next/link';
 import {
   getMarketingWindow,
-  getCACAcumulado,
-  listCACMensual,
   getFunnelEtapas,
   getFunnelSeries,
+  getTendencias,
   listAnunciosGanadores,
   getResumenComparativo,
   getVslSerie,
   type MarketingWindow,
-  type CACAcumulado,
-  type CACMensualEntry,
   type FunnelMes,
   type FunnelEtapa,
   type FunnelSeries,
+  type Tendencias,
   type AnuncioGanador,
   type ResumenComparativo,
   type VslSerie,
 } from '@/lib/queries';
+import { TendenciasSection } from './_components/TendenciasSection';
 import {
   ayerEnTijuana,
   esFechaValida,
   primerDiaDelMesDeFecha,
-  diasAntes,
 } from '@/lib/date-utils';
 import { getDataSources, sourcesToMap } from '@/lib/sources';
 import { DashboardHeader } from './_components/DashboardHeader';
@@ -68,16 +66,6 @@ function fmtPercent(n: number | null | undefined): string {
   return `${n.toFixed(2)}%`;
 }
 
-function fmtMesCorto(yyyy_mm: string): string {
-  const [y, m] = yyyy_mm.split('-').map(Number);
-  const fecha = new Date(Date.UTC(y, m - 1, 1));
-  return new Intl.DateTimeFormat('es-MX', {
-    month: 'short',
-    year: '2-digit',
-    timeZone: 'UTC',
-  }).format(fecha);
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Page
 // ─────────────────────────────────────────────────────────────────────────────
@@ -102,32 +90,28 @@ export default async function Page({
   const rangoDesde = filtroActivo ? desdeParam! : primerDiaDelMesDeFecha(ayerReal);
   const rangoHasta = filtroActivo ? hastaParam! : ayerReal;
 
-  const mesInicio = primerDiaDelMesDeFecha(ayerReal);
-  const mesAnteriorFin = diasAntes(mesInicio, 1);
-  const mesAnteriorInicio = primerDiaDelMesDeFecha(mesAnteriorFin);
-
   let mkt: MarketingWindow | null = null;
   let funnel: FunnelMes | null = null;
   let funnelSeries: FunnelSeries = {};
   let anuncios: AnuncioGanador[] = [];
-  let cacGlobal: CACAcumulado | null = null;
-  let cacMensual: CACMensualEntry[] = [];
+  let tendSemanal: Tendencias | null = null;
+  let tendMensual: Tendencias | null = null;
   let comparativo: ResumenComparativo | null = null;
   let vslSerie: VslSerie | null = null;
   let errorMsg: string | null = null;
 
   try {
     const sourceMap = sourcesToMap(await getDataSources());
-    [mkt, funnel, funnelSeries, anuncios, cacGlobal, cacMensual, comparativo, vslSerie] = await Promise.all([
+    [mkt, funnel, funnelSeries, anuncios, tendSemanal, tendMensual, comparativo, vslSerie] = await Promise.all([
       getMarketingWindow(rangoDesde, rangoHasta),
       getFunnelEtapas(rangoDesde, rangoHasta, sourceMap),
       getFunnelSeries(rangoHasta, 12),
       listAnunciosGanadores(),
-      getCACAcumulado(filtroActivo ? rangoHasta : undefined),
-      listCACMensual(12),
+      getTendencias('semanal', rangoHasta),
+      getTendencias('mensual', rangoHasta),
       filtroActivo
         ? Promise.resolve(null)
-        : getResumenComparativo(mesInicio, ayerReal, mesAnteriorInicio, mesAnteriorFin),
+        : getResumenComparativo(ayerReal),
       getVslSerie(56),
     ]);
   } catch (err) {
@@ -164,11 +148,13 @@ export default async function Page({
           {/* 2.5 — CARD VSL (Panda) */}
           {vslSerie && <VslCard serie={vslSerie} />}
 
+          {/* 2.6 — TENDENCIAS (Fase 16): reemplaza el chart de CAC de una barra */}
+          {tendSemanal && tendMensual && (
+            <TendenciasSection semanal={tendSemanal} mensual={tendMensual} />
+          )}
+
           {/* 3 — ANUNCIOS GANADORES */}
           <AnunciosGanadores anuncios={anuncios} />
-
-          {/* 4 — CAC MENSUAL */}
-          <CACMensualChart entries={cacMensual} cacGlobal={cacGlobal} />
 
           {/* 5 — EFICIENCIA SECUNDARIA */}
           <EficienciaSecundaria mkt={mkt} />
@@ -227,7 +213,7 @@ function KPIsEstrella({
             <Flecha actual={comparativo.inversion_usd.actual} anterior={comparativo.inversion_usd.anterior} invertir />
           ) : null
         }
-        sub={comparativo ? `mes anterior: ${fmtUSD(comparativo.inversion_usd.anterior)}` : undefined}
+        sub={comparativo ? `${comparativo.etiqueta_anterior}: ${fmtUSD(comparativo.inversion_usd.anterior)}` : undefined}
       />
       <KPIEstrellaCard
         label="Agendamientos"
@@ -237,7 +223,7 @@ function KPIsEstrella({
             <Flecha actual={comparativo.agendas.actual} anterior={comparativo.agendas.anterior} />
           ) : null
         }
-        sub={comparativo ? `mes anterior: ${fmtNumber(comparativo.agendas.anterior)}` : undefined}
+        sub={comparativo ? `${comparativo.etiqueta_anterior}: ${fmtNumber(comparativo.agendas.anterior)}` : undefined}
       />
       <KPIEstrellaCard
         label="Costo por agendamiento"
@@ -260,7 +246,7 @@ function KPIsEstrella({
             </span>
           ) : null
         }
-        sub={costoAnterior !== null ? `mes anterior: ${fmtUSD(costoAnterior)}` : undefined}
+        sub={costoAnterior !== null && comparativo ? `${comparativo.etiqueta_anterior}: ${fmtUSD(costoAnterior)}` : undefined}
       />
     </section>
   );
@@ -574,111 +560,6 @@ function AnunciosGanadores({ anuncios }: { anuncios: AnuncioGanador[] }) {
             </tbody>
           </table>
         </div>
-      )}
-    </section>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 4 — CAC mensual (tendencia) + acumulado de referencia
-// ─────────────────────────────────────────────────────────────────────────────
-
-function CACMensualChart({
-  entries,
-  cacGlobal,
-}: {
-  entries: CACMensualEntry[];
-  cacGlobal: CACAcumulado | null;
-}) {
-  if (entries.length === 0) {
-    return (
-      <section
-        className="rounded-xl border px-6 py-5"
-        style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
-      >
-        <div className="text-sm uppercase tracking-widest mb-2" style={{ color: 'var(--text-dim)' }}>
-          CAC mensual (Spend ÷ primeros pagos del mes)
-        </div>
-        <p className="text-base" style={{ color: 'var(--text-pending)' }}>
-          Aún sin meses con primeros pagos capturados. Marcá fecha_primer_pago
-          en al menos 1 lead para activar la tendencia.
-        </p>
-        {cacGlobal && cacGlobal.cac_usd !== null && (
-          <p className="text-sm mt-3" style={{ color: 'var(--text-dim)' }}>
-            CAC acumulado histórico (referencia, basado en cierres):{' '}
-            <strong>{fmtUSD(cacGlobal.cac_usd)}</strong> ÷ {cacGlobal.cierres_total}{' '}
-            cierre{cacGlobal.cierres_total === 1 ? '' : 's'}
-          </p>
-        )}
-      </section>
-    );
-  }
-
-  const maxCAC = Math.max(...entries.map((e) => e.cac_usd));
-  const totalSpend = entries.reduce((s, e) => s + e.spend_usd, 0);
-  const totalPagos = entries.reduce((s, e) => s + e.primeros_pagos, 0);
-  const cacPromedio = totalPagos > 0 ? totalSpend / totalPagos : null;
-
-  return (
-    <section
-      className="rounded-xl border p-6 md:p-8"
-      style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
-    >
-      <div className="flex flex-wrap items-baseline justify-between gap-3 mb-4">
-        <div>
-          <h2 className="text-[28px]" style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500 }}>
-            CAC mensual — tendencia
-          </h2>
-          <p className="text-base" style={{ color: 'var(--text-dim)' }}>
-            Spend Meta del mes (USD) ÷ leads con primer pago en ese mes.
-          </p>
-        </div>
-        {cacPromedio !== null && (
-          <div
-            className="text-[22px] tracking-tight tabular-nums"
-            style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500, color: 'var(--accent-yellow)' }}
-          >
-            Promedio: {fmtUSD(cacPromedio)} / cliente
-          </div>
-        )}
-      </div>
-
-      <div className="space-y-2">
-        {entries.map((e) => {
-          const widthPct = maxCAC > 0 ? (e.cac_usd / maxCAC) * 100 : 0;
-          return (
-            <div key={e.mes} className="flex items-center gap-3 text-base">
-              <div className="w-20 shrink-0" style={{ color: 'var(--text-dim)' }}>
-                {fmtMesCorto(e.mes)}
-              </div>
-              <div className="flex-1 h-6 rounded relative" style={{ background: '#0f0f0f' }}>
-                <div
-                  className="h-full rounded"
-                  style={{
-                    width: `${Math.max(widthPct, 2)}%`,
-                    background: 'var(--accent-yellow)',
-                    opacity: 0.85,
-                  }}
-                  title={`${fmtMesCorto(e.mes)}: ${fmtUSD(e.cac_usd)} (${e.primeros_pagos} cliente${e.primeros_pagos === 1 ? '' : 's'})`}
-                />
-              </div>
-              <div className="w-28 shrink-0 text-right tabular-nums" style={{ color: 'var(--text)' }}>
-                {fmtUSD(e.cac_usd)}
-              </div>
-              <div className="w-20 shrink-0 text-right text-sm tabular-nums" style={{ color: 'var(--text-pending)' }}>
-                {e.primeros_pagos} {e.primeros_pagos === 1 ? 'cliente' : 'clientes'}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {cacGlobal && cacGlobal.cac_usd !== null && (
-        <p className="text-sm mt-4" style={{ color: 'var(--text-dim)' }}>
-          CAC acumulado histórico (referencia, basado en <em>cierres</em> firmados):{' '}
-          <strong style={{ color: 'var(--text)' }}>{fmtUSD(cacGlobal.cac_usd)}</strong>{' '}
-          · {cacGlobal.cierres_total} cierre{cacGlobal.cierres_total === 1 ? '' : 's'}
-        </p>
       )}
     </section>
   );

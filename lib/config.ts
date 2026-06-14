@@ -42,3 +42,9 @@ export const META_PAGE_ID = '282881742134130';
  * Ajustable: subir si el ciclo de venta da más aire entre J1 y J2.
  */
 export const DIAS_GRACIA_J2 = 4;
+
+/**
+ * Umbral (días) del tramo J1 → J2 a partir del cual la Vista General avisa que
+ * los deals se enfrían entre la J1 y la J2. Fase 16.
+ */
+export const DIAS_J1_J2_ALERTA = 10;
