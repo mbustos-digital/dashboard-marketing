@@ -15,14 +15,16 @@ import {
   getDistribucionPipeline,
   getRevenuePeriod,
   getResumenComparativo,
+  getPendientesDeMarcar,
   type ResumenComercialMaduras,
   type DistribucionPipeline,
   type FunnelMes,
   type ResumenComparativo,
+  type Pendientes,
 } from '@/lib/queries';
 import { getDataSources, sourcesToMap } from '@/lib/sources';
 import { getCuotasPendientes, type CuotaPendiente } from '@/lib/pagos';
-import { ayerEnTijuana, primerDiaDelMesDeFecha, diasAntes } from '@/lib/date-utils';
+import { ayerEnTijuana, hoyEnTijuana, primerDiaDelMesDeFecha, diasAntes } from '@/lib/date-utils';
 import { DashboardHeader } from '../_components/DashboardHeader';
 import { DashboardTabs } from '../_components/DashboardTabs';
 
@@ -80,8 +82,26 @@ function construirAlertas(
   maduras: ResumenComercialMaduras,
   pipeline: DistribucionPipeline,
   cuotas: { vencidas: CuotaPendiente[]; porVencer: CuotaPendiente[] },
+  pendientes: Pendientes,
 ): Alerta[] {
   const alertas: Alerta[] = [];
+
+  // ── Pendientes de marcar (Fase 9): ROJA, arriba de TODO ──
+  // Si hay datos manuales sin cargar, el resto del tablero lee datos viejos.
+  // Se empuja PRIMERO y, como el sort es estable y es 'rojo', queda arriba.
+  if (pendientes.total > 0) {
+    const partes: string[] = [];
+    if (pendientes.porTipo.A > 0) partes.push(`${pendientes.porTipo.A} sin asistencia a J1`);
+    if (pendientes.porTipo.B > 0) partes.push(`${pendientes.porTipo.B} sin J2 ni resolución`);
+    if (pendientes.porTipo.C > 0) partes.push(`${pendientes.porTipo.C} sin asistencia a J2`);
+    alertas.push({
+      nivel: 'rojo',
+      titulo: `Tenés ${pendientes.total} dato${pendientes.total === 1 ? '' : 's'} sin marcar — el tablero está leyendo datos viejos`,
+      detalle: `${partes.join(' · ')}. Marcalos para que los números vuelvan a ser confiables.`,
+      href: '/leads?pendientes=1',
+      hrefLabel: 'Marcar pendientes',
+    });
+  }
 
   // ── Etapas de MARKETING del mes (8E: diagnóstico por etapa) ──
   const diagnosticos: Record<string, string> = {
@@ -202,22 +222,25 @@ export default async function GeneralPage() {
     vencidas: [],
     porVencer: [],
   };
+  let pendientes: Pendientes = { items: [], total: 0, porTipo: { A: 0, B: 0, C: 0 } };
   let comparativo: ResumenComparativo | null = null;
   let errorMsg: string | null = null;
 
   try {
     const sourceMap = sourcesToMap(await getDataSources());
-    const [f, m, p, cuo, comp] = await Promise.all([
+    const [f, m, p, cuo, pend, comp] = await Promise.all([
       getFunnelEtapas(mesInicio, ayerReal, sourceMap),
       getResumenComercialMaduras(),
       getDistribucionPipeline(),
       getCuotasPendientes(ayerReal),
+      getPendientesDeMarcar(hoyEnTijuana()),
       getResumenComparativo(mesInicio, ayerReal, mesAnteriorInicio, mesAnteriorFin),
     ]);
     funnel = f;
     maduras = m;
     pipeline = p;
     cuotas = cuo;
+    pendientes = pend;
     comparativo = comp;
   } catch (err) {
     errorMsg = err instanceof Error ? err.message : String(err);
@@ -242,9 +265,14 @@ export default async function GeneralPage() {
         </div>
       ) : (
         <GeneralContent
-          alertas={construirAlertas(funnel, maduras, pipeline, cuotas)}
+          alertas={construirAlertas(funnel, maduras, pipeline, cuotas, pendientes)}
           pipeline={pipeline}
           comparativo={comparativo}
+          notaConfiabilidad={
+            pendientes.total > 0
+              ? 'Confiabilidad limitada hasta marcar pendientes'
+              : null
+          }
         />
       )}
     </main>
@@ -259,10 +287,12 @@ function GeneralContent({
   alertas,
   pipeline,
   comparativo,
+  notaConfiabilidad,
 }: {
   alertas: Alerta[];
   pipeline: DistribucionPipeline;
   comparativo: ResumenComparativo;
+  notaConfiabilidad: string | null;
 }) {
   const urgentes = alertas.filter((a) => a.nivel === 'rojo').length;
   const vigilar = alertas.filter((a) => a.nivel === 'ambar').length;
@@ -284,12 +314,19 @@ function GeneralContent({
       >
         <div className="flex items-center gap-4">
           <span className="text-5xl leading-none">{veredicto.emoji}</span>
-          <h2
-            className="text-[34px] leading-tight"
-            style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500, color: veredicto.color }}
-          >
-            {veredicto.texto}
-          </h2>
+          <div>
+            <h2
+              className="text-[34px] leading-tight"
+              style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500, color: veredicto.color }}
+            >
+              {veredicto.texto}
+            </h2>
+            {notaConfiabilidad && (
+              <p className="text-base mt-1" style={{ color: 'var(--accent-orange)' }}>
+                ⚠ {notaConfiabilidad}
+              </p>
+            )}
+          </div>
         </div>
         <div className="flex gap-5 text-base" style={{ color: 'var(--text-dim)' }}>
           <span>🔴 <strong style={{ color: 'var(--text)' }}>{urgentes}</strong> urgente{urgentes === 1 ? '' : 's'}</span>

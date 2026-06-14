@@ -35,3 +35,10 @@ export function mxnAUsd(montoMxn: number | null | undefined): number {
  * para listar los leadgen_forms.
  */
 export const META_PAGE_ID = '282881742134130';
+
+/**
+ * Días de gracia después de la Junta 1 antes de reclamar que se agende la
+ * Junta 2 (o se marque una resolución). Higiene de datos, Fase 9.
+ * Ajustable: subir si el ciclo de venta da más aire entre J1 y J2.
+ */
+export const DIAS_GRACIA_J2 = 4;

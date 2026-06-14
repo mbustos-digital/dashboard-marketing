@@ -4,6 +4,9 @@
 
 import Link from 'next/link';
 import { listLeads, estadoMadurezLead, labelMadurez, type Lead } from '@/lib/leads';
+import { getPendientesDeMarcar, type PendienteItem } from '@/lib/queries';
+import { hoyEnTijuana } from '@/lib/date-utils';
+import { PendienteActions } from './PendienteActions';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -29,13 +32,95 @@ function fmtCurrency(n: number | null): string {
   }).format(n);
 }
 
-export default async function LeadsPage() {
+export default async function LeadsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ pendientes?: string }>;
+}) {
+  const { pendientes: pendientesParam } = await searchParams;
+  const soloPendientes = pendientesParam === '1';
+
   let leads: Awaited<ReturnType<typeof listLeads>> = [];
+  let pendientesItems: PendienteItem[] = [];
   let errorMsg: string | null = null;
   try {
     leads = await listLeads();
+    if (soloPendientes) {
+      pendientesItems = (await getPendientesDeMarcar(hoyEnTijuana())).items;
+    }
   } catch (err) {
     errorMsg = err instanceof Error ? err.message : String(err);
+  }
+
+  // Modo "pendientes": vista dedicada con resolución en dos taps (Fase 9)
+  if (soloPendientes && !errorMsg) {
+    const porId = new Map(leads.map((l) => [l.id, l]));
+    return (
+      <main className="min-h-screen w-full px-6 py-8 md:px-12 md:py-12 bg-[var(--bg)] text-[var(--text)]">
+        <header className="mb-8">
+          <Link href="/general" className="text-base" style={{ color: 'var(--text-dim)' }}>
+            ← Vista General
+          </Link>
+          <h1
+            className="mt-2 text-[46px] md:text-[62px] tracking-tight leading-tight"
+            style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500 }}
+          >
+            Pendientes de marcar
+          </h1>
+          <p className="mt-1 text-base" style={{ color: 'var(--text-dim)' }}>
+            {pendientesItems.length === 0
+              ? 'Nada pendiente — todos los datos manuales están al día.'
+              : `${pendientesItems.length} dato${pendientesItems.length === 1 ? '' : 's'} sin marcar. Resolvé cada uno acá sin abrir la ficha.`}
+            {'  '}
+            <Link href="/leads" className="ml-2" style={{ color: 'var(--accent-yellow)' }}>
+              Ver todos los leads →
+            </Link>
+          </p>
+        </header>
+
+        {pendientesItems.length === 0 ? (
+          <div
+            className="rounded-xl border p-12 text-center"
+            style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
+          >
+            <p className="text-lg" style={{ color: 'var(--accent-green)' }}>
+              🟢 Todo marcado. El tablero está leyendo datos frescos.
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {pendientesItems.map((p) => {
+              const lead = porId.get(p.lead_id);
+              return (
+                <div
+                  key={`${p.lead_id}-${p.tipo}`}
+                  className="rounded-xl border p-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4"
+                  style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
+                >
+                  <div>
+                    <Link
+                      href={`/leads/${p.lead_id}`}
+                      className="text-lg font-medium"
+                      style={{ color: 'var(--accent-yellow)' }}
+                    >
+                      {p.lead_nombre}
+                    </Link>
+                    <p className="text-base mt-0.5" style={{ color: 'var(--text-dim)' }}>
+                      {p.mensaje}
+                    </p>
+                  </div>
+                  <PendienteActions
+                    leadId={p.lead_id}
+                    tipo={p.tipo}
+                    motivoActual={lead?.motivo_perdida ?? null}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </main>
+    );
   }
 
   return (

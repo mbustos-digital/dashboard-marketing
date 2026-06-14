@@ -6,7 +6,7 @@
 // =============================================================================
 
 import { getSupabaseServer } from './supabase';
-import { TIPO_DE_CAMBIO_USD_MXN } from './config';
+import { TIPO_DE_CAMBIO_USD_MXN, DIAS_GRACIA_J2 } from './config';
 import { getCashCollectedPeriodo, getOutstandingTotal } from './pagos';
 
 export type MarketingWindow = {
@@ -1146,4 +1146,129 @@ export async function getVslSerie(dias = 56): Promise<VslSerie> {
     avg_watch_seconds: watchN > 0 ? watchSum / watchN : null,
     fuente_panda_activa: pandaRows.length > 0,
   };
+}
+
+// =============================================================================
+// HIGIENE DE DATOS — pendientes de marcar (Fase 9)
+// =============================================================================
+// Tres puntos del funnel dependen de una marca manual de Mauricio. Si quedan
+// sin cargar, el tablero lee datos viejos y miente con confianza. Esta query
+// los detecta para que Vista General los pida como alerta roja ANTES de
+// cualquier veredicto.
+// =============================================================================
+
+export type TipoPendiente = 'A' | 'B' | 'C';
+
+export type PendienteItem = {
+  lead_id: number;
+  lead_nombre: string;
+  tipo: TipoPendiente;
+  mensaje: string;
+  fecha: string;       // la fecha relevante (J1 para A/B, J2 para C)
+};
+
+export type Pendientes = {
+  items: PendienteItem[];
+  total: number;
+  porTipo: { A: number; B: number; C: number };
+};
+
+function fmtFechaPendiente(yyyy_mm_dd: string): string {
+  const [y, m, d] = yyyy_mm_dd.split('-').map(Number);
+  return new Intl.DateTimeFormat('es-MX', {
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'UTC',
+  }).format(new Date(Date.UTC(y, m - 1, d)));
+}
+
+function restarDiasISO(yyyy_mm_dd: string, dias: number): string {
+  const [y, m, d] = yyyy_mm_dd.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d - dias)).toISOString().slice(0, 10);
+}
+
+function diasEntreISO(desde: string, hasta: string): number {
+  const [dy, dm, dd] = desde.split('-').map(Number);
+  const [hy, hm, hd] = hasta.split('-').map(Number);
+  return Math.floor((Date.UTC(hy, hm - 1, hd) - Date.UTC(dy, dm - 1, dd)) / (1000 * 60 * 60 * 24));
+}
+
+/**
+ * Leads con un dato manual pendiente de marcar. Un item por lead, con
+ * prioridad A → B → C (lo más fundamental primero):
+ *   A) J1 ya pasó y no se marcó asistencia.
+ *   B) Asistió a J1, sigue 'abierto', no hay J2 y pasaron > DIAS_GRACIA_J2.
+ *   C) J2 ya pasó y no se marcó asistencia.
+ */
+export async function getPendientesDeMarcar(
+  hoy: string = new Date().toISOString().slice(0, 10),
+): Promise<Pendientes> {
+  const supabase = getSupabaseServer();
+  const { data, error } = await supabase
+    .from('leads')
+    .select('id, nombre, fecha_junta_1, fecha_junta_2, asistio_j1, asistio_j2, estado_lead')
+    .or('fecha_junta_1.not.is.null,fecha_junta_2.not.is.null');
+  if (error) throw new Error(`Query pendientes de marcar falló: ${error.message}`);
+
+  const cutoffB = restarDiasISO(hoy, DIAS_GRACIA_J2);
+  const items: PendienteItem[] = [];
+
+  for (const l of (data ?? []) as Array<{
+    id: number;
+    nombre: string;
+    fecha_junta_1: string | null;
+    fecha_junta_2: string | null;
+    asistio_j1: boolean | null;
+    asistio_j2: boolean | null;
+    estado_lead: string;
+  }>) {
+    // A) J1 pasada sin marcar asistencia
+    if (l.fecha_junta_1 && l.fecha_junta_1 < hoy && l.asistio_j1 === null) {
+      items.push({
+        lead_id: l.id,
+        lead_nombre: l.nombre,
+        tipo: 'A',
+        mensaje: `¿Asistió a la J1 del ${fmtFechaPendiente(l.fecha_junta_1)}?`,
+        fecha: l.fecha_junta_1,
+      });
+      continue;
+    }
+    // B) Asistió J1, abierto, sin J2, pasaron > DIAS_GRACIA_J2 desde J1
+    if (
+      l.asistio_j1 === true &&
+      l.fecha_junta_2 === null &&
+      l.estado_lead === 'abierto' &&
+      l.fecha_junta_1 &&
+      l.fecha_junta_1 < cutoffB
+    ) {
+      const dias = diasEntreISO(l.fecha_junta_1, hoy);
+      items.push({
+        lead_id: l.id,
+        lead_nombre: l.nombre,
+        tipo: 'B',
+        mensaje: `Tuvo J1 hace ${dias} días: agendá la J2 o marcá la resolución`,
+        fecha: l.fecha_junta_1,
+      });
+      continue;
+    }
+    // C) J2 pasada sin marcar asistencia
+    if (l.fecha_junta_2 && l.fecha_junta_2 < hoy && l.asistio_j2 === null) {
+      items.push({
+        lead_id: l.id,
+        lead_nombre: l.nombre,
+        tipo: 'C',
+        mensaje: `¿Asistió a la J2 del ${fmtFechaPendiente(l.fecha_junta_2)}?`,
+        fecha: l.fecha_junta_2,
+      });
+      continue;
+    }
+  }
+
+  const porTipo = {
+    A: items.filter((i) => i.tipo === 'A').length,
+    B: items.filter((i) => i.tipo === 'B').length,
+    C: items.filter((i) => i.tipo === 'C').length,
+  };
+
+  return { items, total: items.length, porTipo };
 }
