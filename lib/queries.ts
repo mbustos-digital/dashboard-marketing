@@ -9,6 +9,7 @@ import { getSupabaseServer } from './supabase';
 import { TIPO_DE_CAMBIO_USD_MXN, DIAS_GRACIA_J2 } from './config';
 import { getCashCollectedPeriodo, getOutstandingTotal, getCuotasPendientes } from './pagos';
 import { listReviewPendientes } from './review-queue';
+import { getSettingNum, getSetting } from './settings';
 import {
   contarVslPlays,
   estadoMadurezLead,
@@ -1527,4 +1528,81 @@ export async function getColaDeAccion(
 function fmtUSDcola(n: number | null | undefined): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return '—';
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
+}
+
+// =============================================================================
+// OBJETIVO GLOBAL — progreso acumulado (Fase 14)
+// =============================================================================
+// NO se ata al filtro de rango global: el objetivo es acumulado desde
+// objetivo_desde, siempre. Sirve también de auditoría — si el contador de
+// cierres no cuadra, faltan leads históricos o resoluciones sin marcar.
+// =============================================================================
+
+export type ObjetivoProgreso = {
+  desde: string;
+  cierres_actual: number;
+  cierres_meta: number | null;
+  cash_actual: number;
+  cash_meta: number | null;
+  // Ritmo: cierres en los últimos 30 días → semanas estimadas para la meta
+  cierres_30d: number;
+  semanas_estimadas: number | null;
+  cumplido: boolean;
+};
+
+const OBJETIVO_DESDE_DEFAULT = '2025-12-08';
+
+export async function getObjetivoProgreso(
+  hoy: string = new Date().toISOString().slice(0, 10),
+): Promise<ObjetivoProgreso> {
+  const supabase = getSupabaseServer();
+
+  const [cierresMeta, cashMeta, desdeRaw] = await Promise.all([
+    getSettingNum('objetivo_cierres'),
+    getSettingNum('objetivo_cash_usd'),
+    getSetting('objetivo_desde'),
+  ]);
+  const desde = desdeRaw && /^\d{4}-\d{2}-\d{2}$/.test(desdeRaw) ? desdeRaw : OBJETIVO_DESDE_DEFAULT;
+
+  // Cierres ganados desde `desde` (incluye ganados sin fecha_cierre cargada).
+  const { data: ganados, error: gErr } = await supabase
+    .from('leads')
+    .select('fecha_cierre')
+    .eq('estado_lead', 'ganado');
+  if (gErr) throw new Error(`Query objetivo cierres falló: ${gErr.message}`);
+  const ganadosRows = (ganados ?? []) as Array<{ fecha_cierre: string | null }>;
+  const cierres_actual = ganadosRows.filter(
+    (g) => g.fecha_cierre === null || g.fecha_cierre >= desde,
+  ).length;
+
+  // Cash: Σ pagos pagado=true con fecha_pago en [desde, hoy].
+  const cash_actual = await getCashCollectedPeriodo(desde, hoy);
+
+  // Ritmo: cierres con fecha_cierre en los últimos 30 días.
+  const hace30 = restarDiasISO(hoy, 30);
+  const cierres_30d = ganadosRows.filter(
+    (g) => g.fecha_cierre !== null && g.fecha_cierre >= hace30 && g.fecha_cierre <= hoy,
+  ).length;
+
+  const faltanCierres = cierresMeta !== null ? Math.max(cierresMeta - cierres_actual, 0) : 0;
+  const cierresPorSemana = cierres_30d / (30 / 7);
+  const semanas_estimadas =
+    cierresPorSemana > 0 && faltanCierres > 0 ? Math.ceil(faltanCierres / cierresPorSemana) : null;
+
+  const cumplido =
+    cierresMeta !== null &&
+    cashMeta !== null &&
+    cierres_actual >= cierresMeta &&
+    cash_actual >= cashMeta;
+
+  return {
+    desde,
+    cierres_actual,
+    cierres_meta: cierresMeta,
+    cash_actual,
+    cash_meta: cashMeta,
+    cierres_30d,
+    semanas_estimadas,
+    cumplido,
+  };
 }

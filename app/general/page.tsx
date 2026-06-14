@@ -18,6 +18,7 @@ import {
   getPendientesDeMarcar,
   getJuntasProximas,
   getColaDeAccion,
+  getObjetivoProgreso,
   type ResumenComercialMaduras,
   type DistribucionPipeline,
   type FunnelMes,
@@ -25,6 +26,7 @@ import {
   type Pendientes,
   type JuntaProxima,
   type ColaItem,
+  type ObjetivoProgreso,
 } from '@/lib/queries';
 import { getDataSources, sourcesToMap } from '@/lib/sources';
 import { getCuotasPendientes, type CuotaPendiente } from '@/lib/pagos';
@@ -32,6 +34,7 @@ import { ayerEnTijuana, hoyEnTijuana, primerDiaDelMesDeFecha, diasAntes } from '
 import { DashboardHeader } from '../_components/DashboardHeader';
 import { DashboardTabs } from '../_components/DashboardTabs';
 import { PendienteActions } from '../leads/PendienteActions';
+import { ObjetivoBloque } from './ObjetivoBloque';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -230,6 +233,7 @@ export default async function GeneralPage() {
   let pendientes: Pendientes = { items: [], total: 0, porTipo: { A: 0, B: 0, C: 0 } };
   let juntas: JuntaProxima[] = [];
   let cola: ColaItem[] = [];
+  let objetivo: ObjetivoProgreso | null = null;
   let comparativo: ResumenComparativo | null = null;
   let errorMsg: string | null = null;
 
@@ -237,7 +241,7 @@ export default async function GeneralPage() {
 
   try {
     const sourceMap = sourcesToMap(await getDataSources());
-    const [f, m, p, cuo, pend, jun, col, comp] = await Promise.all([
+    const [f, m, p, cuo, pend, jun, col, obj, comp] = await Promise.all([
       getFunnelEtapas(mesInicio, ayerReal, sourceMap),
       getResumenComercialMaduras(),
       getDistribucionPipeline(),
@@ -245,6 +249,7 @@ export default async function GeneralPage() {
       getPendientesDeMarcar(hoyReal),
       getJuntasProximas(hoyReal, 2),
       getColaDeAccion(hoyReal),
+      getObjetivoProgreso(hoyReal),
       getResumenComparativo(mesInicio, ayerReal, mesAnteriorInicio, mesAnteriorFin),
     ]);
     funnel = f;
@@ -254,6 +259,7 @@ export default async function GeneralPage() {
     pendientes = pend;
     juntas = jun;
     cola = col;
+    objetivo = obj;
     comparativo = comp;
   } catch (err) {
     errorMsg = err instanceof Error ? err.message : String(err);
@@ -281,6 +287,7 @@ export default async function GeneralPage() {
           alertas={construirAlertas(funnel, maduras, pipeline, cuotas, pendientes)}
           juntas={juntas}
           cola={cola}
+          objetivo={objetivo}
           pipeline={pipeline}
           comparativo={comparativo}
           notaConfiabilidad={
@@ -302,6 +309,7 @@ function GeneralContent({
   alertas,
   juntas,
   cola,
+  objetivo,
   pipeline,
   comparativo,
   notaConfiabilidad,
@@ -309,6 +317,7 @@ function GeneralContent({
   alertas: Alerta[];
   juntas: JuntaProxima[];
   cola: ColaItem[];
+  objetivo: ObjetivoProgreso | null;
   pipeline: DistribucionPipeline;
   comparativo: ResumenComparativo;
   notaConfiabilidad: string | null;
@@ -340,7 +349,10 @@ function GeneralContent({
       {/* 3) COLA DE ACCIÓN */}
       <ColaDeAccion items={cola} />
 
-      {/* 4) VEREDICTO + diagnóstico */}
+      {/* 4) OBJETIVO GLOBAL (acumulado, no atado al filtro) */}
+      {objetivo && <ObjetivoBloque progreso={objetivo} />}
+
+      {/* 5) VEREDICTO + diagnóstico */}
       <section
         className="rounded-xl border p-6 md:p-8 flex flex-wrap items-center justify-between gap-4"
         style={{ background: 'var(--card-bg)', borderColor: veredicto.color, borderWidth: 2 }}
