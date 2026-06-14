@@ -241,6 +241,81 @@ export async function getOutstandingTotal(): Promise<number> {
   return (data ?? []).reduce((s, p) => s + Number(p.monto_usd ?? 0), 0);
 }
 
+export type OutstandingLead = {
+  lead_id: number;
+  lead_nombre: string;
+  vendido_usd: number | null;
+  cobrado_usd: number;
+  pendiente_usd: number;
+  proxima_cuota: { numero: number; monto_usd: number; fecha_esperada: string | null } | null;
+  dias_desde_cierre: number | null;
+  fecha_cierre: string | null;
+};
+
+/**
+ * Detalle nominal del outstanding (Fase 13): un renglón por lead con cuotas
+ * pendientes. La suma de pendiente_usd iguala getOutstandingTotal().
+ */
+export async function getOutstandingDetalle(
+  hoy: string = new Date().toISOString().slice(0, 10),
+): Promise<{ items: OutstandingLead[]; total: number }> {
+  const supabase = getSupabaseServer();
+  const { data, error } = await supabase
+    .from('pagos')
+    .select('lead_id, numero, monto_usd, fecha_esperada, pagado, leads(nombre, monto_cierre_usd, fecha_cierre)');
+  if (error) throw new Error(`Error leyendo detalle de outstanding: ${error.message}`);
+
+  type Row = {
+    lead_id: number;
+    numero: number;
+    monto_usd: number;
+    fecha_esperada: string | null;
+    pagado: boolean;
+    leads: { nombre: string; monto_cierre_usd: number | null; fecha_cierre: string | null } | { nombre: string; monto_cierre_usd: number | null; fecha_cierre: string | null }[] | null;
+  };
+
+  const porLead = new Map<number, Row[]>();
+  for (const row of (data ?? []) as Row[]) {
+    const arr = porLead.get(row.lead_id) ?? [];
+    arr.push(row);
+    porLead.set(row.lead_id, arr);
+  }
+
+  const [hy, hm, hd] = hoy.split('-').map(Number);
+  const hoyUTC = Date.UTC(hy, hm - 1, hd);
+  const items: OutstandingLead[] = [];
+
+  for (const [leadId, rows] of porLead) {
+    const noPagados = rows.filter((r) => !r.pagado);
+    const pendiente = noPagados.reduce((s, r) => s + Number(r.monto_usd), 0);
+    if (pendiente <= 0) continue;
+    const cobrado = rows.filter((r) => r.pagado).reduce((s, r) => s + Number(r.monto_usd), 0);
+    const rel = Array.isArray(rows[0].leads) ? rows[0].leads[0] : rows[0].leads;
+    const conFecha = noPagados.filter((r) => r.fecha_esperada).sort((a, b) => (a.fecha_esperada! < b.fecha_esperada! ? -1 : 1));
+    const prox = conFecha[0] ?? noPagados[0];
+    const fechaCierre = rel?.fecha_cierre ?? null;
+    let dias: number | null = null;
+    if (fechaCierre) {
+      const [cy, cm, cd] = fechaCierre.split('-').map(Number);
+      dias = Math.floor((hoyUTC - Date.UTC(cy, cm - 1, cd)) / (1000 * 60 * 60 * 24));
+    }
+    items.push({
+      lead_id: leadId,
+      lead_nombre: rel?.nombre ?? `Lead #${leadId}`,
+      vendido_usd: rel?.monto_cierre_usd ?? null,
+      cobrado_usd: cobrado,
+      pendiente_usd: pendiente,
+      proxima_cuota: prox ? { numero: prox.numero, monto_usd: Number(prox.monto_usd), fecha_esperada: prox.fecha_esperada } : null,
+      dias_desde_cierre: dias,
+      fecha_cierre: fechaCierre,
+    });
+  }
+
+  items.sort((a, b) => b.pendiente_usd - a.pendiente_usd);
+  const total = items.reduce((s, i) => s + i.pendiente_usd, 0);
+  return { items, total };
+}
+
 export type CuotaPendiente = {
   pago_id: number;
   lead_id: number;

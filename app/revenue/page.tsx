@@ -17,14 +17,23 @@
 // =============================================================================
 
 import { getRevenuePeriod, type RevenuePeriod } from '@/lib/queries';
+import { getOutstandingDetalle, type OutstandingLead } from '@/lib/pagos';
 import {
   ayerEnTijuana,
   esFechaValida,
+  hoyEnTijuana,
   primerDiaDelMesDeFecha,
 } from '@/lib/date-utils';
+import Link from 'next/link';
 import { DashboardHeader } from '../_components/DashboardHeader';
 import { DashboardTabs } from '../_components/DashboardTabs';
 import { FechaSelector } from '../_components/FechaSelector';
+
+function fmtFechaCorta(yyyy_mm_dd: string | null): string {
+  if (!yyyy_mm_dd) return '—';
+  const [y, m, d] = yyyy_mm_dd.split('-').map(Number);
+  return new Intl.DateTimeFormat('es-MX', { day: 'numeric', month: 'short', timeZone: 'UTC' }).format(new Date(Date.UTC(y, m - 1, d)));
+}
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -72,10 +81,14 @@ export default async function RevenuePage({
   const rangoHasta = filtroActivo ? hastaParam! : ayerReal;
 
   let revenue: RevenuePeriod | null = null;
+  let outstandingDet: { items: OutstandingLead[]; total: number } = { items: [], total: 0 };
   let errorMsg: string | null = null;
 
   try {
-    revenue = await getRevenuePeriod(rangoDesde, rangoHasta);
+    [revenue, outstandingDet] = await Promise.all([
+      getRevenuePeriod(rangoDesde, rangoHasta),
+      getOutstandingDetalle(hoyEnTijuana()),
+    ]);
   } catch (err) {
     errorMsg = err instanceof Error ? err.message : String(err);
   }
@@ -136,6 +149,9 @@ export default async function RevenuePage({
                 hint="Pendiente de cobro — todas las cuotas no pagadas del pipeline"
               />
             </Grid>
+
+            {/* DRILL (Fase 13): el outstanding lleva a los nombres y montos */}
+            <OutstandingDrill detalle={outstandingDet} />
           </Section>
 
           {/* EFICIENCIA — post-Fase 1 todo en USD, ROAS válidos */}
@@ -248,6 +264,73 @@ function CascadaBar({
         pipeline está en la tarjeta Outstanding.
       </p>
     </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OutstandingDrill — panel nominal del outstanding (Fase 13)
+// <details> nativo: clickeable, sin JS, SSR-friendly. El total iguala la card.
+// ─────────────────────────────────────────────────────────────────────────────
+function OutstandingDrill({ detalle }: { detalle: { items: OutstandingLead[]; total: number } }) {
+  if (detalle.items.length === 0) {
+    return (
+      <p className="mt-4 text-base" style={{ color: 'var(--text-pending)' }}>
+        Sin cuotas pendientes — todo cobrado.
+      </p>
+    );
+  }
+  return (
+    <details className="mt-4 group">
+      <summary
+        className="cursor-pointer select-none px-4 py-3 rounded-lg border text-base flex items-center justify-between gap-3"
+        style={{ borderColor: 'var(--accent-orange)', color: 'var(--accent-orange)' }}
+      >
+        <span>
+          Ver a quién cobrarle — {detalle.items.length} lead{detalle.items.length === 1 ? '' : 's'} ·{' '}
+          {fmtUSD(detalle.total)} pendiente
+        </span>
+        <span className="text-sm" style={{ color: 'var(--text-dim)' }}>desplegar ▾</span>
+      </summary>
+      <div className="mt-3 rounded-xl border overflow-x-auto" style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}>
+        <table className="w-full text-base">
+          <thead>
+            <tr className="text-sm uppercase tracking-wider text-left" style={{ background: '#0f0f0f', color: 'var(--text-dim)' }}>
+              <th className="px-4 py-3">Lead</th>
+              <th className="px-4 py-3 text-right">Vendido</th>
+              <th className="px-4 py-3 text-right">Cobrado</th>
+              <th className="px-4 py-3 text-right">Pendiente</th>
+              <th className="px-4 py-3">Próxima cuota</th>
+              <th className="px-4 py-3 text-right hidden md:table-cell">Días desde cierre</th>
+            </tr>
+          </thead>
+          <tbody>
+            {detalle.items.map((it) => (
+              <tr key={it.lead_id} className="border-t" style={{ borderColor: 'var(--card-border)' }}>
+                <td className="px-4 py-3">
+                  <Link href={`/leads/${it.lead_id}`} style={{ color: 'var(--accent-yellow)' }}>{it.lead_nombre}</Link>
+                </td>
+                <td className="px-4 py-3 text-right tabular-nums">{fmtUSD(it.vendido_usd)}</td>
+                <td className="px-4 py-3 text-right tabular-nums" style={{ color: 'var(--accent-green)' }}>{fmtUSD(it.cobrado_usd)}</td>
+                <td className="px-4 py-3 text-right tabular-nums" style={{ color: 'var(--accent-orange)' }}>{fmtUSD(it.pendiente_usd)}</td>
+                <td className="px-4 py-3 text-sm" style={{ color: 'var(--text-dim)' }}>
+                  {it.proxima_cuota
+                    ? `${it.proxima_cuota.numero === 0 ? 'inicial' : 'cuota ' + it.proxima_cuota.numero} · ${fmtUSD(it.proxima_cuota.monto_usd)} · ${fmtFechaCorta(it.proxima_cuota.fecha_esperada)}`
+                    : '—'}
+                </td>
+                <td className="px-4 py-3 text-right hidden md:table-cell tabular-nums" style={{ color: 'var(--text-dim)' }}>
+                  {it.dias_desde_cierre ?? '—'}
+                </td>
+              </tr>
+            ))}
+            <tr className="border-t" style={{ borderColor: 'var(--card-border)' }}>
+              <td className="px-4 py-3 font-semibold" colSpan={3}>Total pendiente</td>
+              <td className="px-4 py-3 text-right font-semibold tabular-nums" style={{ color: 'var(--accent-orange)' }}>{fmtUSD(detalle.total)}</td>
+              <td className="px-4 py-3" colSpan={2}></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
   );
 }
 

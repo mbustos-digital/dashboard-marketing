@@ -140,8 +140,8 @@ function construirAlertas(
         titulo: `No-show de ${noShow.toFixed(0)}% en cohortes maduras`,
         detalle:
           'Muchos agendan y no llegan a J1. Revisá recordatorios automáticos (WhatsApp/email 24h y 1h antes) y la calificación previa del formulario.',
-        href: '/comercial',
-        hrefLabel: 'Ver Comercial',
+        href: '/leads?noshow=1',
+        hrefLabel: 'Ver no-shows',
       });
     }
   }

@@ -28,6 +28,10 @@ export type LeadsParams = {
   agendo?: string;
   sort?: string;
   dir?: string;
+  // Drills de la Fase 13 (rango de J1 de una cohorte, y no-shows recientes)
+  desde?: string;
+  hasta?: string;
+  noshow?: string;
 };
 
 type SortKey = 'creado' | 'j1' | 'estado' | 'monto' | 'nombre' | 'agendo';
@@ -61,18 +65,24 @@ export function LeadsBrowser({ leads, initial }: { leads: EnrichedLead[]; initia
   const madurez = initial.madurez ?? '';
   const origen = initial.origen ?? '';
   const agendo = initial.agendo ?? '';
+  const desde = initial.desde ?? '';
+  const hasta = initial.hasta ?? '';
+  const noshow = initial.noshow ?? '';
   const sort = (initial.sort as SortKey) ?? 'creado';
   const dir = (initial.dir as 'asc' | 'desc') ?? 'desc';
 
   // Sincroniza un cambio de filtro/orden/búsqueda a la URL (vista linkeable)
   const navegar = (cambios: Partial<LeadsParams>) => {
     const params = new URLSearchParams();
-    const merged: LeadsParams = { q, estado, madurez, origen, agendo, sort, dir, ...cambios };
+    const merged: LeadsParams = { q, estado, madurez, origen, agendo, desde, hasta, noshow, sort, dir, ...cambios };
     if (merged.q) params.set('q', merged.q);
     if (merged.estado) params.set('estado', merged.estado);
     if (merged.madurez) params.set('madurez', merged.madurez);
     if (merged.origen) params.set('origen', merged.origen);
     if (merged.agendo) params.set('agendo', merged.agendo);
+    if (merged.desde) params.set('desde', merged.desde);
+    if (merged.hasta) params.set('hasta', merged.hasta);
+    if (merged.noshow) params.set('noshow', merged.noshow);
     if (merged.sort && merged.sort !== 'creado') params.set('sort', merged.sort);
     if (merged.dir && merged.dir !== 'desc') params.set('dir', merged.dir);
     const qs = params.toString();
@@ -97,6 +107,10 @@ export function LeadsBrowser({ leads, initial }: { leads: EnrichedLead[]; initia
     if (origen) arr = arr.filter((l) => l._origenClase === origen);
     if (agendo === 'si') arr = arr.filter((l) => !!l.fecha_agenda);
     if (agendo === 'no') arr = arr.filter((l) => !l.fecha_agenda);
+    // Drills (Fase 13): rango de J1 de una cohorte y no-shows
+    if (desde) arr = arr.filter((l) => l.fecha_junta_1 != null && l.fecha_junta_1 >= desde);
+    if (hasta) arr = arr.filter((l) => l.fecha_junta_1 != null && l.fecha_junta_1 <= hasta);
+    if (noshow === '1') arr = arr.filter((l) => l.asistio_j1 === false);
     const term = q.trim().toLowerCase();
     if (term) {
       arr = arr.filter((l) =>
@@ -125,9 +139,9 @@ export function LeadsBrowser({ leads, initial }: { leads: EnrichedLead[]; initia
       }
     });
     return sorted;
-  }, [leads, q, estado, madurez, origen, agendo, sort, dir]);
+  }, [leads, q, estado, madurez, origen, agendo, desde, hasta, noshow, sort, dir]);
 
-  const filtroActivo = !!(estado || madurez || origen || agendo || q.trim());
+  const filtroActivo = !!(estado || madurez || origen || agendo || desde || hasta || noshow || q.trim());
 
   return (
     <div>
@@ -154,6 +168,10 @@ export function LeadsBrowser({ leads, initial }: { leads: EnrichedLead[]; initia
       <div className="mb-3 text-sm" style={{ color: 'var(--text-dim)' }}>
         {visibles.length} {visibles.length === 1 ? 'lead' : 'leads'}
         {filtroActivo && ' (filtrados)'}
+        {(desde || hasta) && (
+          <span className="ml-2">· cohorte J1 {desde || '…'} → {hasta || '…'}</span>
+        )}
+        {noshow === '1' && <span className="ml-2">· no-shows de J1</span>}
         {filtroActivo && (
           <button onClick={() => { setQ(''); router.replace('/leads', { scroll: false }); }} className="ml-3" style={{ color: 'var(--accent-yellow)' }}>
             limpiar filtros

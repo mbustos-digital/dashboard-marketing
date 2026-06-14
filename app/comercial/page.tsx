@@ -22,8 +22,23 @@ import {
   type TramosSCL,
 } from '@/lib/queries';
 import { ayerEnTijuana } from '@/lib/date-utils';
+import Link from 'next/link';
 import { DashboardHeader } from '../_components/DashboardHeader';
 import { DashboardTabs } from '../_components/DashboardTabs';
+
+// Rango de J1 de una cohorte para el drill a /leads (Fase 13).
+function addDiasISO(iso: string, n: number): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+function finDeMesISO(iso: string): string {
+  const [y, m] = iso.split('-').map(Number);
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); // día 0 del mes siguiente = último del actual
+}
+function rangoCohorte(c: CohorteSemana | CohorteMes): { desde: string; hasta: string } {
+  if ('semana_inicio' in c) return { desde: c.semana_inicio, hasta: addDiasISO(c.semana_inicio, 6) };
+  return { desde: c.mes_inicio, hasta: finDeMesISO(c.mes_inicio) };
+}
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -218,6 +233,7 @@ function CohortesTable({
                 {showCiclo && <th className="px-4 py-4 text-right">Ciclo (d)</th>}
                 <th className="px-4 py-4 text-right">Ventas</th>
                 <th className="px-5 py-4">Estado</th>
+                <th className="px-4 py-4 text-right">Leads</th>
               </tr>
             </thead>
             <tbody>
@@ -267,7 +283,7 @@ function CohorteRowGroup({
   const tasa = tasaCierre(c.cierres, c.limpias);
   const tasaDisplay = renderTasa(tasa, c.estado_madurez);
   const cohorteMes = c as CohorteMes;
-  const nCols = showCiclo ? 9 : 8;
+  const nCols = showCiclo ? 11 : 10;
   return (
     <>
       {conSeparadorMaduras && (
@@ -364,6 +380,20 @@ function RowCohorte({
                         <span style={{ color: 'var(--text-dim)' }}>{c.estado_madurez}</span>
                       </span>
                     </td>
+                    <td className="px-4 py-4 text-right">
+                      {(() => {
+                        const r = rangoCohorte(c);
+                        return (
+                          <Link
+                            href={`/leads?desde=${r.desde}&hasta=${r.hasta}`}
+                            className="text-base"
+                            style={{ color: 'var(--accent-yellow)' }}
+                          >
+                            ver →
+                          </Link>
+                        );
+                      })()}
+                    </td>
                   </tr>
   );
 }
@@ -421,8 +451,12 @@ function KPIsComercial({ maduras, scl }: { maduras: ResumenComercialMaduras; scl
     maduras.total_j1 > 0
       ? ((maduras.total_j1 - maduras.asistencias) / maduras.total_j1) * 100
       : null;
+  // Muestra chica (Fase 7): cuando un KPI se muestra como conteo, ofrecemos un
+  // camino a los leads que lo componen (Fase 13).
+  const muestraChica = maduras.limpias < 3 || maduras.total_j1 < 3;
 
   return (
+    <>
     <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
       {/* Ratio joya */}
       <div
@@ -531,6 +565,15 @@ function KPIsComercial({ maduras, scl }: { maduras: ResumenComercialMaduras; scl
         </div>
       </div>
     </section>
+    {muestraChica && (
+      <p className="mt-3 text-base" style={{ color: 'var(--text-dim)' }}>
+        Pocos datos para porcentajes confiables.{' '}
+        <Link href="/leads?madurez=madura" style={{ color: 'var(--accent-yellow)' }}>
+          Ver los leads maduros →
+        </Link>
+      </p>
+    )}
+    </>
   );
 }
 
