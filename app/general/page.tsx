@@ -16,17 +16,22 @@ import {
   getRevenuePeriod,
   getResumenComparativo,
   getPendientesDeMarcar,
+  getJuntasProximas,
+  getColaDeAccion,
   type ResumenComercialMaduras,
   type DistribucionPipeline,
   type FunnelMes,
   type ResumenComparativo,
   type Pendientes,
+  type JuntaProxima,
+  type ColaItem,
 } from '@/lib/queries';
 import { getDataSources, sourcesToMap } from '@/lib/sources';
 import { getCuotasPendientes, type CuotaPendiente } from '@/lib/pagos';
 import { ayerEnTijuana, hoyEnTijuana, primerDiaDelMesDeFecha, diasAntes } from '@/lib/date-utils';
 import { DashboardHeader } from '../_components/DashboardHeader';
 import { DashboardTabs } from '../_components/DashboardTabs';
+import { PendienteActions } from '../leads/PendienteActions';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -223,17 +228,23 @@ export default async function GeneralPage() {
     porVencer: [],
   };
   let pendientes: Pendientes = { items: [], total: 0, porTipo: { A: 0, B: 0, C: 0 } };
+  let juntas: JuntaProxima[] = [];
+  let cola: ColaItem[] = [];
   let comparativo: ResumenComparativo | null = null;
   let errorMsg: string | null = null;
 
+  const hoyReal = hoyEnTijuana();
+
   try {
     const sourceMap = sourcesToMap(await getDataSources());
-    const [f, m, p, cuo, pend, comp] = await Promise.all([
+    const [f, m, p, cuo, pend, jun, col, comp] = await Promise.all([
       getFunnelEtapas(mesInicio, ayerReal, sourceMap),
       getResumenComercialMaduras(),
       getDistribucionPipeline(),
       getCuotasPendientes(ayerReal),
-      getPendientesDeMarcar(hoyEnTijuana()),
+      getPendientesDeMarcar(hoyReal),
+      getJuntasProximas(hoyReal, 2),
+      getColaDeAccion(hoyReal),
       getResumenComparativo(mesInicio, ayerReal, mesAnteriorInicio, mesAnteriorFin),
     ]);
     funnel = f;
@@ -241,6 +252,8 @@ export default async function GeneralPage() {
     pipeline = p;
     cuotas = cuo;
     pendientes = pend;
+    juntas = jun;
+    cola = col;
     comparativo = comp;
   } catch (err) {
     errorMsg = err instanceof Error ? err.message : String(err);
@@ -266,6 +279,8 @@ export default async function GeneralPage() {
       ) : (
         <GeneralContent
           alertas={construirAlertas(funnel, maduras, pipeline, cuotas, pendientes)}
+          juntas={juntas}
+          cola={cola}
           pipeline={pipeline}
           comparativo={comparativo}
           notaConfiabilidad={
@@ -285,11 +300,15 @@ export default async function GeneralPage() {
 
 function GeneralContent({
   alertas,
+  juntas,
+  cola,
   pipeline,
   comparativo,
   notaConfiabilidad,
 }: {
   alertas: Alerta[];
+  juntas: JuntaProxima[];
+  cola: ColaItem[];
   pipeline: DistribucionPipeline;
   comparativo: ResumenComparativo;
   notaConfiabilidad: string | null;
@@ -297,6 +316,11 @@ function GeneralContent({
   const urgentes = alertas.filter((a) => a.nivel === 'rojo').length;
   const vigilar = alertas.filter((a) => a.nivel === 'ambar').length;
   const enOrden = alertas.filter((a) => a.nivel === 'verde').length;
+
+  // La alerta roja de pendientes va arriba de todo (Fase 11); el resto del
+  // semáforo diagnóstico queda debajo del bloque operativo.
+  const alertaPendientes = alertas.find((a) => a.href === '/leads?pendientes=1') ?? null;
+  const alertasResto = alertas.filter((a) => a.href !== '/leads?pendientes=1');
 
   const veredicto =
     urgentes > 0
@@ -306,8 +330,17 @@ function GeneralContent({
       : { texto: 'El negocio está sano', color: 'var(--accent-green)', emoji: '🟢' };
 
   return (
-    <div className="space-y-8">
-      {/* VEREDICTO */}
+    <div className="space-y-6 md:space-y-8">
+      {/* 1) PENDIENTES (alerta roja, arriba de todo) */}
+      {alertaPendientes && <AlertaCard alerta={alertaPendientes} />}
+
+      {/* 2) TUS JUNTAS (hoy y mañana) */}
+      <TusJuntas juntas={juntas} />
+
+      {/* 3) COLA DE ACCIÓN */}
+      <ColaDeAccion items={cola} />
+
+      {/* 4) VEREDICTO + diagnóstico */}
       <section
         className="rounded-xl border p-6 md:p-8 flex flex-wrap items-center justify-between gap-4"
         style={{ background: 'var(--card-bg)', borderColor: veredicto.color, borderWidth: 2 }}
@@ -335,20 +368,10 @@ function GeneralContent({
         </div>
       </section>
 
-      {/* ALERTAS */}
-      {alertas.length === 0 ? (
-        <section
-          className="rounded-xl border p-8 text-center"
-          style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
-        >
-          <p className="text-lg" style={{ color: 'var(--text-dim)' }}>
-            Sin señales todavía — faltan datos para evaluar el funnel. Vuelve
-            cuando haya leads marcados y gasto del mes.
-          </p>
-        </section>
-      ) : (
+      {/* ALERTAS diagnósticas (sin la de pendientes, ya mostrada arriba) */}
+      {alertasResto.length > 0 && (
         <div className="space-y-4">
-          {alertas.map((a, i) => (
+          {alertasResto.map((a, i) => (
             <AlertaCard key={i} alerta={a} />
           ))}
         </div>
@@ -359,6 +382,172 @@ function GeneralContent({
 
       {/* RESUMEN DEL MES */}
       <ResumenMes comparativo={comparativo} />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TusJuntas — J1/J2 de hoy y mañana con contexto (Fase 11)
+// ─────────────────────────────────────────────────────────────────────────────
+function TusJuntas({ juntas }: { juntas: JuntaProxima[] }) {
+  return (
+    <section>
+      <h2 className="text-[28px] mb-3" style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500 }}>
+        Tus juntas
+      </h2>
+      {juntas.length === 0 ? (
+        <p className="text-base" style={{ color: 'var(--text-dim)' }}>Sin juntas hoy ni mañana.</p>
+      ) : (
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {juntas.map((j) => (
+            <JuntaCard key={`${j.lead_id}-${j.tipo}-${j.fecha}`} junta={j} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function JuntaCard({ junta }: { junta: JuntaProxima }) {
+  const respuestas = [
+    { label: 'Facturación', value: junta.respuestas.facturacion },
+    { label: 'Equipo', value: junta.respuestas.colaboradores },
+    { label: 'Objetivo', value: junta.respuestas.objetivo },
+    { label: 'Cuándo', value: junta.respuestas.cuando_empezar },
+  ].filter((r) => r.value && r.value.trim());
+
+  return (
+    <div
+      className="rounded-xl border p-5"
+      style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
+    >
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-2">
+        <div className="flex items-center gap-2">
+          <span
+            className="px-2.5 py-1 rounded-full text-sm font-semibold"
+            style={{
+              background: junta.tipo === 'J1' ? 'rgba(240,198,10,0.15)' : 'rgba(62,207,142,0.15)',
+              color: junta.tipo === 'J1' ? 'var(--accent-yellow)' : 'var(--accent-green)',
+            }}
+          >
+            {junta.tipo} · {junta.dia}
+          </span>
+          {junta.agendo_sin_vsl ? (
+            <span
+              className="px-2.5 py-1 rounded-full text-sm font-semibold"
+              style={{ background: 'rgba(255,107,53,0.15)', color: 'var(--accent-orange)' }}
+            >
+              ⚠ agendó sin ver el VSL
+            </span>
+          ) : (
+            <span className="text-sm" style={{ color: 'var(--text-dim)' }}>
+              vio el VSL {junta.vsl_plays}×
+            </span>
+          )}
+        </div>
+        <Link href={`/leads/${junta.lead_id}`} className="text-sm" style={{ color: 'var(--accent-yellow)' }}>
+          Abrir ficha →
+        </Link>
+      </div>
+
+      <div className="text-xl" style={{ fontWeight: 600 }}>{junta.nombre}</div>
+      <div className="text-base mb-3" style={{ color: 'var(--text-dim)' }}>
+        {junta.empresa ?? 'Sin empresa'} · de {junta.origen}
+      </div>
+
+      {respuestas.length > 0 ? (
+        <div className="space-y-1.5">
+          {respuestas.map((r) => (
+            <div key={r.label} className="text-base">
+              <span className="text-sm uppercase tracking-wider mr-2" style={{ color: 'var(--text-dim)' }}>
+                {r.label}
+              </span>
+              <span>{r.value}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm" style={{ color: 'var(--text-pending)' }}>
+          Sin respuestas del formulario (lead manual u orgánico).
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ColaDeAccion — pendientes concretos del día (Fase 11)
+// ─────────────────────────────────────────────────────────────────────────────
+const COLA_LABEL: Record<ColaItem['tipo'], string> = {
+  pendiente_marcar: 'Marcar asistencia',
+  cobro_vencido: 'Cobranza',
+  j2_sin_match: 'J2 sin match',
+  noshow_recontactar: 'Recontactar no-shows',
+  form_sin_agenda: 'Formularios sin agenda',
+  j1_sin_j2: 'Sin J2 ni resolución',
+};
+const COLA_ORDEN: Array<ColaItem['tipo']> = [
+  'pendiente_marcar', 'cobro_vencido', 'j2_sin_match', 'noshow_recontactar', 'form_sin_agenda', 'j1_sin_j2',
+];
+
+function ColaDeAccion({ items }: { items: ColaItem[] }) {
+  return (
+    <section>
+      <h2 className="text-[28px] mb-3" style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500 }}>
+        Cola de acción
+      </h2>
+      {items.length === 0 ? (
+        <p className="text-base" style={{ color: 'var(--accent-green)' }}>Nada urgente — todo al día.</p>
+      ) : (
+        <div className="space-y-5">
+          {COLA_ORDEN.map((tipo) => {
+            const grupo = items.filter((i) => i.tipo === tipo);
+            if (grupo.length === 0) return null;
+            return (
+              <div key={tipo}>
+                <div className="text-sm uppercase tracking-wider mb-2" style={{ color: 'var(--text-dim)' }}>
+                  {COLA_LABEL[tipo]} · {grupo.length}
+                </div>
+                <div className="space-y-2">
+                  {grupo.map((item, i) => (
+                    <ColaCard key={`${tipo}-${item.lead_id ?? 'x'}-${i}`} item={item} />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ColaCard({ item }: { item: ColaItem }) {
+  const inline = item.tipo === 'pendiente_marcar' || item.tipo === 'j1_sin_j2';
+  return (
+    <div
+      className="rounded-lg border p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3"
+      style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
+    >
+      <div className="min-w-0">
+        <div className="text-base" style={{ fontWeight: 600 }}>{item.titulo}</div>
+        <div className="text-sm" style={{ color: 'var(--text-dim)' }}>{item.detalle}</div>
+      </div>
+      {inline && item.lead_id != null && item.pendiente_tipo ? (
+        <PendienteActions
+          leadId={item.lead_id}
+          tipo={item.pendiente_tipo}
+          motivoActual={item.motivo_actual ?? null}
+        />
+      ) : (
+        <Link
+          href={item.link}
+          className="shrink-0 px-4 py-2 rounded-lg border text-base text-center"
+          style={{ borderColor: 'var(--accent-yellow)', color: 'var(--accent-yellow)' }}
+        >
+          {item.accion} →
+        </Link>
+      )}
     </div>
   );
 }

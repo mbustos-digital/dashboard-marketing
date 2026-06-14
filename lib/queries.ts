@@ -7,7 +7,15 @@
 
 import { getSupabaseServer } from './supabase';
 import { TIPO_DE_CAMBIO_USD_MXN, DIAS_GRACIA_J2 } from './config';
-import { getCashCollectedPeriodo, getOutstandingTotal } from './pagos';
+import { getCashCollectedPeriodo, getOutstandingTotal, getCuotasPendientes } from './pagos';
+import { listReviewPendientes } from './review-queue';
+import {
+  contarVslPlays,
+  estadoMadurezLead,
+  type Lead,
+  type EstadoLead,
+  type EstadoMadurez,
+} from './leads';
 
 export type MarketingWindow = {
   // Rango
@@ -1271,4 +1279,252 @@ export async function getPendientesDeMarcar(
   };
 
   return { items, total: items.length, porTipo };
+}
+
+// =============================================================================
+// TAB HOY — operación diaria (Fase 11)
+// =============================================================================
+// getJuntasProximas: las J1/J2 de hoy y mañana con todo el contexto del lead.
+// getColaDeAccion: lista tipada de pendientes concretos (marcar, cobrar,
+// recontactar, formularios sin agenda, J2 sin match).
+// =============================================================================
+
+function masDiasISO(yyyy_mm_dd: string, dias: number): string {
+  return restarDiasISO(yyyy_mm_dd, -dias);
+}
+
+function origenLegible(lead: Pick<Lead, 'meta_ad_name' | 'meta_campaign_name' | 'utm_campaign'>): string {
+  return (
+    lead.meta_ad_name?.trim() ||
+    lead.meta_campaign_name?.trim() ||
+    lead.utm_campaign?.trim() ||
+    'directo'
+  );
+}
+
+export type JuntaProxima = {
+  lead_id: number;
+  tipo: 'J1' | 'J2';
+  fecha: string;
+  dia: 'hoy' | 'mañana' | string;  // string para días futuros si dias>2
+  nombre: string;
+  empresa: string | null;
+  respuestas: {
+    facturacion: string | null;
+    colaboradores: string | null;
+    objetivo: string | null;
+    cuando_empezar: string | null;
+  };
+  vsl_plays: number;
+  agendo_sin_vsl: boolean;
+  origen: string;
+  madurez: EstadoMadurez;
+  estado_lead: EstadoLead;
+};
+
+/**
+ * Juntas (J1/J2) en hoy..hoy+dias-1, con el contexto del lead listo para la
+ * llamada. Un lead con J1 hoy y J2 mañana produce dos entradas.
+ */
+export async function getJuntasProximas(
+  hoy: string = new Date().toISOString().slice(0, 10),
+  dias = 2,
+): Promise<JuntaProxima[]> {
+  const fechas: string[] = [];
+  for (let i = 0; i < dias; i++) fechas.push(masDiasISO(hoy, i));
+  const fechasSet = new Set(fechas);
+  const enLista = fechas.join(',');
+
+  const supabase = getSupabaseServer();
+  const { data, error } = await supabase
+    .from('leads')
+    .select('*')
+    .or(`fecha_junta_1.in.(${enLista}),fecha_junta_2.in.(${enLista})`);
+  if (error) throw new Error(`Query juntas próximas falló: ${error.message}`);
+
+  const leads = (data ?? []) as Lead[];
+  const juntas: JuntaProxima[] = [];
+
+  for (const lead of leads) {
+    const candidatas: Array<{ tipo: 'J1' | 'J2'; fecha: string | null }> = [
+      { tipo: 'J1', fecha: lead.fecha_junta_1 },
+      { tipo: 'J2', fecha: lead.fecha_junta_2 },
+    ];
+    for (const c of candidatas) {
+      if (!c.fecha || !fechasSet.has(c.fecha)) continue;
+      const plays = await contarVslPlays(lead.visitor_id);
+      juntas.push({
+        lead_id: lead.id,
+        tipo: c.tipo,
+        fecha: c.fecha,
+        dia: c.fecha === hoy ? 'hoy' : c.fecha === masDiasISO(hoy, 1) ? 'mañana' : c.fecha,
+        nombre: lead.nombre,
+        empresa: lead.empresa,
+        respuestas: {
+          facturacion: lead.respuesta_facturacion,
+          colaboradores: lead.respuesta_colaboradores,
+          objetivo: lead.respuesta_objetivo,
+          cuando_empezar: lead.respuesta_cuando_empezar,
+        },
+        vsl_plays: plays,
+        agendo_sin_vsl: plays === 0,
+        origen: origenLegible(lead),
+        madurez: estadoMadurezLead(lead),
+        estado_lead: lead.estado_lead,
+      });
+    }
+  }
+
+  // Orden: por fecha asc, J1 antes que J2 el mismo día
+  juntas.sort((a, b) => (a.fecha === b.fecha ? (a.tipo === b.tipo ? 0 : a.tipo === 'J1' ? -1 : 1) : a.fecha < b.fecha ? -1 : 1));
+  return juntas;
+}
+
+export type ColaTipo =
+  | 'pendiente_marcar'
+  | 'cobro_vencido'
+  | 'j2_sin_match'
+  | 'noshow_recontactar'
+  | 'form_sin_agenda'
+  | 'j1_sin_j2';
+
+export type ColaItem = {
+  tipo: ColaTipo;
+  lead_id: number | null;       // null para j2_sin_match (no hay lead aún)
+  lead_nombre: string;
+  titulo: string;
+  detalle: string;
+  accion: string;
+  link: string;
+  // Para resolver pendiente_marcar / j1_sin_j2 inline (controles de Fase 9)
+  pendiente_tipo?: TipoPendiente;
+  motivo_actual?: string | null;
+};
+
+/**
+ * Cola de acción del día: pendientes concretos, en orden de prioridad.
+ * Orden: pendiente_marcar, cobro_vencido, j2_sin_match, noshow_recontactar,
+ * form_sin_agenda, j1_sin_j2.
+ */
+export async function getColaDeAccion(
+  hoy: string = new Date().toISOString().slice(0, 10),
+): Promise<ColaItem[]> {
+  const supabase = getSupabaseServer();
+  const items: ColaItem[] = [];
+
+  // ── 1) pendiente_marcar (tipos A y C) y j1_sin_j2 (tipo B) ──
+  const pend = await getPendientesDeMarcar(hoy);
+  const marcarAC = pend.items.filter((i) => i.tipo !== 'B');
+  const tipoB = pend.items.filter((i) => i.tipo === 'B');
+  for (const p of marcarAC) {
+    items.push({
+      tipo: 'pendiente_marcar',
+      lead_id: p.lead_id,
+      lead_nombre: p.lead_nombre,
+      titulo: p.mensaje,
+      detalle: p.tipo === 'A' ? 'Marcá si asistió a la J1.' : 'Marcá si asistió a la J2.',
+      accion: 'Marcar asistencia',
+      link: `/leads/${p.lead_id}`,
+      pendiente_tipo: p.tipo,
+    });
+  }
+
+  // ── 2) cobro_vencido: cuotas no pagadas con fecha_esperada <= hoy ──
+  const { vencidas, porVencer } = await getCuotasPendientes(hoy);
+  const cobrosVencidos = [...vencidas, ...porVencer.filter((c) => c.dias === 0)];
+  for (const c of cobrosVencidos) {
+    const etiqueta = c.numero === 0 ? 'el cobro inicial' : `la cuota ${c.numero}`;
+    items.push({
+      tipo: 'cobro_vencido',
+      lead_id: c.lead_id,
+      lead_nombre: c.lead_nombre,
+      titulo: `Cobrá ${etiqueta} de ${fmtUSDcola(c.monto_usd)} a ${c.lead_nombre}`,
+      detalle: c.dias === 0 ? 'Vence hoy.' : `Venció el ${fmtFechaPendiente(c.fecha_esperada)} (hace ${Math.abs(c.dias)} día${Math.abs(c.dias) === 1 ? '' : 's'}).`,
+      accion: 'Registrar pago',
+      link: `/leads/${c.lead_id}`,
+    });
+  }
+
+  // ── 3) j2_sin_match: review_queue resuelto=false ──
+  const review = await listReviewPendientes();
+  for (const r of review.filter((x) => x.tipo === 'j2_sin_match')) {
+    items.push({
+      tipo: 'j2_sin_match',
+      lead_id: null,
+      lead_nombre: r.nombre ?? r.email ?? 'desconocido',
+      titulo: `Alguien agendó una J2 con ${r.email ?? 'email desconocido'} y no encontré su lead`,
+      detalle: r.fecha_evento ? `Fecha de la J2: ${fmtFechaPendiente(r.fecha_evento)}. Buscá el lead y cargá la J2 a mano.` : 'Buscá el lead y cargá la J2 a mano.',
+      accion: 'Resolver a mano',
+      link: '/leads',
+    });
+  }
+
+  // ── 4) noshow_recontactar: no-show de J1 en los últimos 14 días, sin junta futura, abierto ──
+  const cutoff14 = restarDiasISO(hoy, 14);
+  const { data: noshowRows, error: nsErr } = await supabase
+    .from('leads')
+    .select('id, nombre, fecha_junta_1, fecha_junta_2')
+    .eq('asistio_j1', false)
+    .eq('estado_lead', 'abierto')
+    .gte('fecha_junta_1', cutoff14)
+    .lt('fecha_junta_1', hoy);
+  if (nsErr) throw new Error(`Query no-shows falló: ${nsErr.message}`);
+  for (const r of (noshowRows ?? []) as Array<{ id: number; nombre: string; fecha_junta_1: string; fecha_junta_2: string | null }>) {
+    if (r.fecha_junta_2 && r.fecha_junta_2 >= hoy) continue; // tiene J2 futura → no es no-show a recontactar
+    items.push({
+      tipo: 'noshow_recontactar',
+      lead_id: r.id,
+      lead_nombre: r.nombre,
+      titulo: `${r.nombre} no se presentó a la J1: recontactá`,
+      detalle: `La J1 era el ${fmtFechaPendiente(r.fecha_junta_1)}. Mandale un mensaje para reagendar.`,
+      accion: 'Recontactar',
+      link: `/leads/${r.id}`,
+    });
+  }
+
+  // ── 5) form_sin_agenda: dejó el instant form y no agendó (1–7 días) ──
+  const d7 = restarDiasISO(hoy, 7);
+  const d1 = restarDiasISO(hoy, 1);
+  const { data: formRows, error: fErr } = await supabase
+    .from('leads')
+    .select('id, nombre, created_at, fecha_agenda, meta_lead_id')
+    .not('meta_lead_id', 'is', null)
+    .is('fecha_agenda', null)
+    .gte('created_at', d7)
+    .lt('created_at', hoy);
+  if (fErr) throw new Error(`Query form sin agenda falló: ${fErr.message}`);
+  for (const r of (formRows ?? []) as Array<{ id: number; nombre: string; created_at: string }>) {
+    const cd = r.created_at.slice(0, 10);
+    if (cd > d1) continue; // demasiado fresco (<1 día)
+    items.push({
+      tipo: 'form_sin_agenda',
+      lead_id: r.id,
+      lead_nombre: r.nombre,
+      titulo: `${r.nombre} dejó el formulario y no agendó`,
+      detalle: 'Mandale el link de Calendly para que reserve su Junta 1.',
+      accion: 'Mandar link',
+      link: `/leads/${r.id}`,
+    });
+  }
+
+  // ── 6) j1_sin_j2 (tipo B): tuvo J1, sigue abierto, sin J2 ni resolución ──
+  for (const p of tipoB) {
+    items.push({
+      tipo: 'j1_sin_j2',
+      lead_id: p.lead_id,
+      lead_nombre: p.lead_nombre,
+      titulo: p.mensaje,
+      detalle: 'Agendá la J2 (Calendly) o marcá la resolución.',
+      accion: 'Resolver',
+      link: `/leads/${p.lead_id}`,
+      pendiente_tipo: 'B',
+    });
+  }
+
+  return items;
+}
+
+function fmtUSDcola(n: number | null | undefined): string {
+  if (n === null || n === undefined || !Number.isFinite(n)) return '—';
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(n);
 }
