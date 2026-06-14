@@ -3,42 +3,40 @@
 // =============================================================================
 
 import Link from 'next/link';
-import { listLeads, estadoMadurezLead, labelMadurez, type Lead } from '@/lib/leads';
+import { listLeads, estadoMadurezLead, type Lead } from '@/lib/leads';
 import { getPendientesDeMarcar, type PendienteItem } from '@/lib/queries';
 import { hoyEnTijuana } from '@/lib/date-utils';
 import { PendienteActions } from './PendienteActions';
+import { LeadsBrowser, type EnrichedLead, type LeadsParams } from './LeadsBrowser';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-function fmtFechaCorta(yyyy_mm_dd: string | null): string {
-  if (!yyyy_mm_dd) return '—';
-  const [y, m, d] = yyyy_mm_dd.split('-').map(Number);
-  const fecha = new Date(Date.UTC(y, m - 1, d));
-  return new Intl.DateTimeFormat('es-MX', {
-    day: 'numeric',
-    month: 'short',
-    year: '2-digit',
-    timeZone: 'UTC',
-  }).format(fecha);
+// Origen SIEMPRE legible (Fase 12): nombre del anuncio > campaña > utm >
+// "Directo". Nunca un ID pelado: si solo hay ID Meta, "Meta · sin nombre"
+// con el ID en tooltip.
+function origenLegibleLista(lead: Lead): { texto: string; tooltip: string | null } {
+  const nombre = lead.meta_ad_name?.trim() || lead.meta_campaign_name?.trim() || lead.utm_campaign?.trim();
+  if (nombre) return { texto: nombre, tooltip: null };
+  if (lead.meta_lead_id || lead.meta_ad_id) {
+    return { texto: 'Meta · sin nombre', tooltip: lead.meta_ad_id ?? lead.meta_lead_id };
+  }
+  return { texto: 'Directo', tooltip: null };
 }
 
-function fmtCurrency(n: number | null): string {
-  if (n === null) return '—';
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    maximumFractionDigits: 0,
-  }).format(n);
+function origenClase(lead: Lead): EnrichedLead['_origenClase'] {
+  if (lead.meta_lead_id) return 'instant_form';
+  if (lead.fecha_agenda) return 'calendly';
+  return 'otro';
 }
 
 export default async function LeadsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ pendientes?: string }>;
+  searchParams: Promise<LeadsParams & { pendientes?: string }>;
 }) {
-  const { pendientes: pendientesParam } = await searchParams;
-  const soloPendientes = pendientesParam === '1';
+  const sp = await searchParams;
+  const soloPendientes = sp.pendientes === '1';
 
   let leads: Awaited<ReturnType<typeof listLeads>> = [];
   let pendientesItems: PendienteItem[] = [];
@@ -187,129 +185,19 @@ export default async function LeadsPage({
           </Link>
         </div>
       ) : (
-        <div
-          className="rounded-xl border overflow-hidden"
-          style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
-        >
-          <table className="w-full text-base">
-            <thead>
-              <tr
-                className="text-sm uppercase tracking-wider text-left"
-                style={{ background: '#0f0f0f', color: 'var(--text-dim)' }}
-              >
-                <th className="px-4 py-3">Nombre</th>
-                <th className="px-4 py-3 hidden md:table-cell">Empresa</th>
-                <th className="px-4 py-3 hidden md:table-cell">Origen</th>
-                <th className="px-4 py-3">Fecha J1</th>
-                <th className="px-4 py-3">Cohorte</th>
-                <th className="px-4 py-3 text-right">Estado</th>
-                <th className="px-4 py-3 text-right hidden md:table-cell">Creado</th>
-              </tr>
-            </thead>
-            <tbody>
-              {leads.map((lead) => {
-                const estado = estadoMadurezLead(lead);
-                const { emoji, label } = labelMadurez(estado);
-                return (
-                  <tr
-                    key={lead.id}
-                    className="border-t hover:bg-[#181818] transition-colors"
-                    style={{ borderColor: 'var(--card-border)' }}
-                  >
-                    <td className="px-4 py-3">
-                      <Link
-                        href={`/leads/${lead.id}`}
-                        className="font-medium"
-                        style={{ color: 'var(--accent-yellow)' }}
-                      >
-                        {lead.nombre}
-                      </Link>
-                      {lead.email && (
-                        <div className="text-sm" style={{ color: 'var(--text-dim)' }}>
-                          {lead.email}
-                        </div>
-                      )}
-                    </td>
-                    <td
-                      className="px-4 py-3 hidden md:table-cell"
-                      style={{ color: 'var(--text-dim)' }}
-                    >
-                      {lead.empresa ?? '—'}
-                    </td>
-                    <td
-                      className="px-4 py-3 hidden md:table-cell text-sm max-w-[180px] truncate"
-                      style={{ color: 'var(--text-dim)' }}
-                      title={lead.meta_campaign_name ?? lead.utm_campaign ?? undefined}
-                    >
-                      {lead.meta_campaign_name ?? lead.utm_campaign ?? '—'}
-                    </td>
-                    <td className="px-4 py-3">
-                      {fmtFechaCorta(lead.fecha_junta_1)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="inline-flex items-center gap-2">
-                        <span>{emoji}</span>
-                        <span style={{ color: 'var(--text-dim)' }}>{label}</span>
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <EstadoChip lead={lead} />
-                    </td>
-                    <td
-                      className="px-4 py-3 text-right hidden md:table-cell text-sm"
-                      style={{ color: 'var(--text-dim)' }}
-                    >
-                      {fmtFechaCorta(lead.created_at.slice(0, 10))}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <LeadsBrowser leads={leads.map(enriquecer)} initial={sp} />
       )}
     </main>
   );
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// EstadoChip — chip de desenlace del lead (Fase 8)
-//   ganado: verde + monto · perdido: rojo tenue · descalificado: gris · abierto: —
-// ─────────────────────────────────────────────────────────────────────────────
-function EstadoChip({ lead }: { lead: Lead }) {
-  const base =
-    'inline-block px-2.5 py-1 rounded-full text-sm font-medium whitespace-nowrap';
-  switch (lead.estado_lead) {
-    case 'ganado':
-      return (
-        <span
-          className={base}
-          style={{ background: 'rgba(40,167,69,0.12)', color: 'var(--accent-green)' }}
-        >
-          Ganado · {fmtCurrency(lead.monto_cierre_usd)}
-        </span>
-      );
-    case 'perdido':
-      return (
-        <span
-          className={base}
-          style={{ background: 'rgba(255,107,53,0.10)', color: 'var(--accent-orange)' }}
-          title={lead.motivo_perdida ?? undefined}
-        >
-          Perdido
-        </span>
-      );
-    case 'descalificado':
-      return (
-        <span
-          className={base}
-          style={{ background: '#1a1a1a', color: 'var(--text-dim)' }}
-          title={lead.motivo_perdida ?? undefined}
-        >
-          Descalificado
-        </span>
-      );
-    default:
-      return <span style={{ color: 'var(--text-pending)' }}>—</span>;
-  }
+// Enriquece un lead con la madurez y el origen legible (lib/leads es
+// server-only, así que esto se calcula acá y se pasa ya listo al cliente).
+function enriquecer(lead: Lead): EnrichedLead {
+  return {
+    ...lead,
+    _madurez: estadoMadurezLead(lead),
+    _origen: origenLegibleLista(lead),
+    _origenClase: origenClase(lead),
+  };
 }
