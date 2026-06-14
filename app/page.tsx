@@ -17,7 +17,7 @@ import {
   getFunnelEtapas,
   getFunnelSeries,
   getTendencias,
-  listAnunciosGanadores,
+  getSenalesRecon,
   getResumenComparativo,
   getVslSerie,
   type MarketingWindow,
@@ -25,15 +25,17 @@ import {
   type FunnelEtapa,
   type FunnelSeries,
   type Tendencias,
-  type AnuncioGanador,
+  type SenalRecon,
   type ResumenComparativo,
   type VslSerie,
 } from '@/lib/queries';
 import { TendenciasSection } from './_components/TendenciasSection';
+import { ReconPanel } from './_components/ReconPanel';
 import {
   ayerEnTijuana,
   esFechaValida,
   primerDiaDelMesDeFecha,
+  diasAntes,
 } from '@/lib/date-utils';
 import { getDataSources, sourcesToMap } from '@/lib/sources';
 import { DashboardHeader } from './_components/DashboardHeader';
@@ -93,20 +95,23 @@ export default async function Page({
   let mkt: MarketingWindow | null = null;
   let funnel: FunnelMes | null = null;
   let funnelSeries: FunnelSeries = {};
-  let anuncios: AnuncioGanador[] = [];
+  let senales: SenalRecon[] = [];
   let tendSemanal: Tendencias | null = null;
   let tendMensual: Tendencias | null = null;
   let comparativo: ResumenComparativo | null = null;
   let vslSerie: VslSerie | null = null;
   let errorMsg: string | null = null;
 
+  // Recon mira siempre los últimos 14 días (no depende del filtro de rango).
+  const reconDesde = diasAntes(rangoHasta, 14);
+
   try {
     const sourceMap = sourcesToMap(await getDataSources());
-    [mkt, funnel, funnelSeries, anuncios, tendSemanal, tendMensual, comparativo, vslSerie] = await Promise.all([
+    [mkt, funnel, funnelSeries, senales, tendSemanal, tendMensual, comparativo, vslSerie] = await Promise.all([
       getMarketingWindow(rangoDesde, rangoHasta),
       getFunnelEtapas(rangoDesde, rangoHasta, sourceMap),
       getFunnelSeries(rangoHasta, 12),
-      listAnunciosGanadores(),
+      getSenalesRecon(reconDesde, rangoHasta),
       getTendencias('semanal', rangoHasta),
       getTendencias('mensual', rangoHasta),
       filtroActivo
@@ -153,8 +158,8 @@ export default async function Page({
             <TendenciasSection semanal={tendSemanal} mensual={tendMensual} />
           )}
 
-          {/* 3 — ANUNCIOS GANADORES */}
-          <AnunciosGanadores anuncios={anuncios} />
+          {/* 3 — PANEL RECON (Fase 17): reemplaza Anuncios ganadores */}
+          <ReconPanel senales={senales} />
 
           {/* 5 — EFICIENCIA SECUNDARIA */}
           <EficienciaSecundaria mkt={mkt} />
@@ -484,84 +489,6 @@ function InfoTooltip({ texto }: { texto: string }) {
         {texto}
       </span>
     </span>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// 3 — Anuncios ganadores
-// ─────────────────────────────────────────────────────────────────────────────
-
-function AnunciosGanadores({ anuncios }: { anuncios: AnuncioGanador[] }) {
-  return (
-    <section
-      className="rounded-xl border p-6 md:p-8"
-      style={{ background: 'var(--card-bg)', borderColor: 'var(--card-border)' }}
-    >
-      <h2
-        className="text-[28px]"
-        style={{ fontFamily: 'var(--font-cormorant)', fontWeight: 500 }}
-      >
-        Anuncios ganadores
-      </h2>
-      <p className="text-base mt-1 mb-5" style={{ color: 'var(--text-dim)' }}>
-        Rankeados por agendas. Datos de los leads que llegan con anuncio
-        identificado (instant form de Meta).
-      </p>
-
-      {anuncios.length === 0 ? (
-        <p className="text-base py-4" style={{ color: 'var(--text-pending)' }}>
-          Aún sin leads con anuncio identificado. Esta tabla se llena sola
-          cuando el webhook de Meta Lead Ads empiece a recibir leads de los
-          formularios instantáneos (pendiente: publicar la app de Meta).
-        </p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-base">
-            <thead>
-              <tr
-                className="text-sm uppercase tracking-wider text-left"
-                style={{ background: '#0f0f0f', color: 'var(--text-dim)' }}
-              >
-                <th className="px-4 py-3">Anuncio</th>
-                <th className="px-3 py-3 text-right">Leads</th>
-                <th className="px-3 py-3 text-right">Agendas</th>
-                <th className="px-3 py-3 text-right">Cierres</th>
-                <th className="px-3 py-3 text-right">Cash</th>
-                <th className="px-4 py-3"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {anuncios.map((a) => {
-                const sinAgendas = a.leads > 0 && a.agendas === 0;
-                return (
-                  <tr key={a.ad_name} className="border-t" style={{ borderColor: 'var(--card-border)' }}>
-                    <td className="px-4 py-3 font-medium max-w-[280px] truncate" title={a.ad_name}>
-                      {a.ad_name}
-                    </td>
-                    <td className="px-3 py-3 text-right tabular-nums">{a.leads}</td>
-                    <td className="px-3 py-3 text-right tabular-nums">{a.agendas}</td>
-                    <td className="px-3 py-3 text-right tabular-nums">{a.cierres}</td>
-                    <td className="px-3 py-3 text-right tabular-nums" style={{ color: a.cash_usd > 0 ? 'var(--accent-green)' : undefined }}>
-                      {a.cash_usd > 0 ? fmtUSD(a.cash_usd) : '—'}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      {sinAgendas && (
-                        <span
-                          className="text-xs px-2 py-1 rounded uppercase tracking-wide"
-                          style={{ background: '#2a1410', color: 'var(--accent-orange)' }}
-                        >
-                          candidato a pausar
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
   );
 }
 

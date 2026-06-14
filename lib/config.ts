@@ -48,3 +48,15 @@ export const DIAS_GRACIA_J2 = 4;
  * los deals se enfrían entre la J1 y la J2. Fase 16.
  */
 export const DIAS_J1_J2_ALERTA = 10;
+
+/**
+ * Panel Recon (Fase 17). Umbral de INTENCIÓN: leads (instant forms con
+ * teléfono verificado) por versión de oferta a partir del cual la señal se
+ * considera validada. Metodología de Jan.
+ */
+export const RECON_LEADS_VALIDACION = 10;
+
+/**
+ * Panel Recon: gasto (USD) sin un solo lead que amerita apagar el anuncio.
+ */
+export const RECON_SPEND_SIN_LEADS_USD = 80;

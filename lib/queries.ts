@@ -6,7 +6,7 @@
 // =============================================================================
 
 import { getSupabaseServer } from './supabase';
-import { TIPO_DE_CAMBIO_USD_MXN, DIAS_GRACIA_J2 } from './config';
+import { TIPO_DE_CAMBIO_USD_MXN, DIAS_GRACIA_J2, RECON_LEADS_VALIDACION, RECON_SPEND_SIN_LEADS_USD } from './config';
 import { getCashCollectedPeriodo, getOutstandingTotal, getCuotasPendientes } from './pagos';
 import { listReviewPendientes } from './review-queue';
 import { getSettingNum, getSetting } from './settings';
@@ -1076,35 +1076,184 @@ export async function getFunnelSeries(
 // Anuncios ganadores (Prompt 8B) — leads agrupados por meta_ad_name
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type AnuncioGanador = {
+// =============================================================================
+// PANEL RECON — señales por anuncio (Fase 17)
+// =============================================================================
+// La metodología de Jan: NO se decide con métricas de consumo (hook/hold/CTR).
+// Se decide con dos señales: INTENCIÓN (≥10 instant forms por versión de
+// oferta) y RITMO de presupuesto (el adset gasta su techo 3 días seguidos).
+// Intención sin ritmo = falso positivo → bolitas de nieve (réplicas), no
+// escalar vertical.
+// =============================================================================
+
+export type RitmoEstado = 'verde' | 'cruz' | 'sin_datos';
+export type ReconVeredicto = 'explorando' | 'validada' | 'falso_positivo' | 'apagar' | 'pausada';
+
+export type SenalRecon = {
+  ad_id: string;
   ad_name: string;
-  leads: number;
+  campana: string | null;
+  adset_name: string | null;
+  spend_usd: number;
+  leads: number;                 // leads_count acumulado del rango
+  meta_leads: number;            // RECON_LEADS_VALIDACION
+  dias_corriendo: number;        // días con spend > 0
+  ritmo: RitmoEstado;
+  ritmo_dias: Array<{ fecha: string; spend_usd: number; budget_usd: number; ok: boolean }>;
+  veredicto: ReconVeredicto;
+  // Downstream (de leads matcheados por meta_ad_id)
   agendas: number;
   cierres: number;
   cash_usd: number;
+  // Diagnóstico de consumo (solo para arreglar el creativo, NO para decidir)
+  hook_rate: number | null;      // video_3s / impresiones
+  hold_rate: number | null;      // thruplay / video_3s
+  ctr_link: number | null;
+  cpl_usd: number | null;
+  frequency: number | null;
 };
 
-export async function listAnunciosGanadores(): Promise<AnuncioGanador[]> {
+export async function getSenalesRecon(
+  start: string,
+  end: string,
+): Promise<SenalRecon[]> {
   const supabase = getSupabaseServer();
-  const { data, error } = await supabase
-    .from('leads')
-    .select('meta_ad_name, fecha_agenda, cerro, total_cobrado_usd')
-    .not('meta_ad_name', 'is', null);
+  const [adsRes, budgetRes, leadsRes] = await Promise.all([
+    supabase
+      .from('marketing_metrics_daily')
+      .select('fecha, ad_id, ad_name, campaign_name, adset_id, adset_name, spend, leads_count, impressions, link_clicks, video_3s_views, video_thruplay, frequency')
+      .eq('plataforma', 'meta')
+      .not('ad_id', 'is', null)
+      .gte('fecha', start)
+      .lte('fecha', end),
+    supabase
+      .from('adset_budget_daily')
+      .select('fecha, adset_id, daily_budget_mxn')
+      .gte('fecha', start)
+      .lte('fecha', end),
+    supabase
+      .from('leads')
+      .select('meta_ad_id, fecha_agenda, estado_lead, total_cobrado_usd')
+      .not('meta_ad_id', 'is', null),
+  ]);
+  for (const r of [adsRes, budgetRes, leadsRes]) if (r.error) throw new Error(`getSenalesRecon falló: ${r.error.message}`);
 
-  if (error) throw new Error(`Anuncios ganadores falló: ${error.message}`);
+  type AdRow = { fecha: string; ad_id: string; ad_name: string | null; campaign_name: string | null; adset_id: string | null; adset_name: string | null; spend: number | null; leads_count: number | null; impressions: number | null; link_clicks: number | null; video_3s_views: number | null; video_thruplay: number | null; frequency: number | null };
+  const adRows = (adsRes.data ?? []) as AdRow[];
 
-  const porAd = new Map<string, AnuncioGanador>();
-  for (const r of data ?? []) {
-    const name = r.meta_ad_name as string;
-    const acc = porAd.get(name) ?? { ad_name: name, leads: 0, agendas: 0, cierres: 0, cash_usd: 0 };
-    acc.leads += 1;
-    if (r.fecha_agenda) acc.agendas += 1;
-    if (r.cerro === true) acc.cierres += 1;
-    acc.cash_usd += Number(r.total_cobrado_usd ?? 0);
-    porAd.set(name, acc);
+  // Gasto diario por adset (suma de sus anuncios) — para la señal de ritmo.
+  const adsetDaySpendMxn = new Map<string, number>(); // key `${adset_id}|${fecha}`
+  for (const r of adRows) {
+    if (!r.adset_id) continue;
+    const k = `${r.adset_id}|${r.fecha}`;
+    adsetDaySpendMxn.set(k, (adsetDaySpendMxn.get(k) ?? 0) + Number(r.spend ?? 0));
+  }
+  // Presupuestos por adset/fecha
+  const budgetByAdsetDay = new Map<string, number>();
+  const budgetDaysByAdset = new Map<string, string[]>();
+  for (const b of (budgetRes.data ?? []) as Array<{ fecha: string; adset_id: string; daily_budget_mxn: number | null }>) {
+    budgetByAdsetDay.set(`${b.adset_id}|${b.fecha}`, Number(b.daily_budget_mxn ?? 0));
+    const arr = budgetDaysByAdset.get(b.adset_id) ?? [];
+    arr.push(b.fecha);
+    budgetDaysByAdset.set(b.adset_id, arr);
   }
 
-  return [...porAd.values()].sort((a, b) => b.agendas - a.agendas || b.leads - a.leads);
+  // Downstream por ad_id (leads reales matcheados)
+  const downByAd = new Map<string, { agendas: number; cierres: number; cash: number }>();
+  for (const l of (leadsRes.data ?? []) as Array<{ meta_ad_id: string | null; fecha_agenda: string | null; estado_lead: string; total_cobrado_usd: number | null }>) {
+    if (!l.meta_ad_id) continue;
+    const d = downByAd.get(l.meta_ad_id) ?? { agendas: 0, cierres: 0, cash: 0 };
+    if (l.fecha_agenda) d.agendas += 1;
+    if (l.estado_lead === 'ganado') d.cierres += 1;
+    d.cash += Number(l.total_cobrado_usd ?? 0);
+    downByAd.set(l.meta_ad_id, d);
+  }
+
+  // Agregar por anuncio
+  type Acc = { ad_name: string | null; campana: string | null; adset_id: string | null; adset_name: string | null; spendMxn: number; leads: number; imp: number; clk: number; v3: number; thru: number; freqVals: number[]; diasSpend: Set<string>; fechasSpend: string[] };
+  const porAd = new Map<string, Acc>();
+  for (const r of adRows) {
+    const a = porAd.get(r.ad_id) ?? { ad_name: r.ad_name, campana: r.campaign_name, adset_id: r.adset_id, adset_name: r.adset_name, spendMxn: 0, leads: 0, imp: 0, clk: 0, v3: 0, thru: 0, freqVals: [], diasSpend: new Set<string>(), fechasSpend: [] };
+    const sp = Number(r.spend ?? 0);
+    a.spendMxn += sp;
+    a.leads += Number(r.leads_count ?? 0);
+    a.imp += Number(r.impressions ?? 0);
+    a.clk += Number(r.link_clicks ?? 0);
+    a.v3 += Number(r.video_3s_views ?? 0);
+    a.thru += Number(r.video_thruplay ?? 0);
+    if (r.frequency) a.freqVals.push(Number(r.frequency));
+    if (sp > 0) { a.diasSpend.add(r.fecha); a.fechasSpend.push(r.fecha); }
+    porAd.set(r.ad_id, a);
+  }
+
+  const ultimos3 = (() => {
+    // últimos 3 días del rango (calendario), para "pausada"
+    const arr: string[] = [];
+    for (let i = 0; i < 3; i++) arr.push(restarDiasISO(end, i));
+    return new Set(arr);
+  })();
+
+  const señales: SenalRecon[] = [];
+  for (const [adId, a] of porAd) {
+    const spendUsd = a.spendMxn / TIPO_DE_CAMBIO_USD_MXN;
+    const down = downByAd.get(adId) ?? { agendas: 0, cierres: 0, cash: 0 };
+    const diasCorriendo = a.diasSpend.size;
+
+    // RITMO: últimos 3 días con presupuesto del adset padre
+    let ritmo: RitmoEstado = 'sin_datos';
+    const ritmoDias: SenalRecon['ritmo_dias'] = [];
+    if (a.adset_id) {
+      const days = (budgetDaysByAdset.get(a.adset_id) ?? []).slice().sort().reverse().slice(0, 3);
+      if (days.length === 3) {
+        let todosOk = true;
+        for (const f of days.slice().reverse()) {
+          const budgetMxn = budgetByAdsetDay.get(`${a.adset_id}|${f}`) ?? 0;
+          const spMxn = adsetDaySpendMxn.get(`${a.adset_id}|${f}`) ?? 0;
+          const ok = budgetMxn > 0 && spMxn >= 0.99 * budgetMxn;
+          if (!ok) todosOk = false;
+          ritmoDias.push({ fecha: f, spend_usd: spMxn / TIPO_DE_CAMBIO_USD_MXN, budget_usd: budgetMxn / TIPO_DE_CAMBIO_USD_MXN, ok });
+        }
+        ritmo = todosOk ? 'verde' : 'cruz';
+      }
+    }
+
+    // VEREDICTO
+    const conSpendReciente = a.fechasSpend.some((f) => ultimos3.has(f));
+    let veredicto: ReconVeredicto;
+    if (!conSpendReciente) {
+      veredicto = 'pausada';
+    } else if (spendUsd >= RECON_SPEND_SIN_LEADS_USD && a.leads === 0 && diasCorriendo >= 4) {
+      veredicto = 'apagar';
+    } else if (a.leads >= RECON_LEADS_VALIDACION) {
+      veredicto = ritmo === 'verde' ? 'validada' : ritmo === 'cruz' ? 'falso_positivo' : 'explorando';
+    } else {
+      veredicto = 'explorando';
+    }
+
+    señales.push({
+      ad_id: adId,
+      ad_name: a.ad_name ?? adId,
+      campana: a.campana,
+      adset_name: a.adset_name,
+      spend_usd: spendUsd,
+      leads: a.leads,
+      meta_leads: RECON_LEADS_VALIDACION,
+      dias_corriendo: diasCorriendo,
+      ritmo,
+      ritmo_dias: ritmoDias,
+      veredicto,
+      agendas: down.agendas,
+      cierres: down.cierres,
+      cash_usd: down.cash,
+      hook_rate: a.imp > 0 ? (a.v3 / a.imp) * 100 : null,
+      hold_rate: a.v3 > 0 ? (a.thru / a.v3) * 100 : null,
+      ctr_link: a.imp > 0 ? (a.clk / a.imp) * 100 : null,
+      cpl_usd: a.leads > 0 ? spendUsd / a.leads : null,
+      frequency: a.freqVals.length > 0 ? a.freqVals.reduce((s, v) => s + v, 0) / a.freqVals.length : null,
+    });
+  }
+
+  return señales.sort((x, y) => y.leads - x.leads || y.spend_usd - x.spend_usd);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
