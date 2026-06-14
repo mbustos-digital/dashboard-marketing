@@ -179,27 +179,21 @@ export default async function RevenuePage({
                 label="ROAS cash"
                 value={fmtRatio(revenue.roas_cash)}
                 accent="green"
-                hint="Cash Collected ÷ Spend"
+                hint="Cash Collected ÷ Spend · el dinero que SÍ entró"
               />
               <KPI
                 label="ROAS sold"
                 value={fmtRatio(revenue.roas_sold)}
-                accent="yellow"
-                hint="Sold Revenue ÷ Spend"
+                accent="default"
+                hint="Sold ÷ Spend · comprometido, no cobrado"
               />
             </Grid>
+            <p className="text-sm mt-3" style={{ color: 'var(--text-pending)' }}>
+              El ROAS que cuenta es el de <strong style={{ color: 'var(--accent-green)' }}>cash</strong>:
+              mide la plata que entró. El de <em>sold</em> usa lo firmado y puede inflar con dinero que
+              todavía no se cobró.
+            </p>
           </Section>
-
-          <p className="text-base" style={{ color: 'var(--text-pending)' }}>
-            <strong style={{ color: 'var(--text-dim)' }}>Sold</strong> = lo
-            firmado/vendido (campo monto_cierre_usd). {' '}
-            <strong style={{ color: 'var(--text-dim)' }}>Cash</strong> = lo
-            efectivamente cobrado (campo total_cobrado_usd). {' '}
-            <strong style={{ color: 'var(--text-dim)' }}>Outstanding</strong> =
-            diferencia (puede ser por planes de pago, mora, o cierre reciente sin
-            primer pago aún). Si los 4 campos de cobranza están vacíos en los leads,
-            verás $0 — es correcto hasta que captures los datos.
-          </p>
         </div>
       )}
     </main>
@@ -256,13 +250,10 @@ function CascadaBar({
           </div>
         )}
       </div>
-      <p className="text-base mt-2" style={{ color: 'var(--text-dim)' }}>
-        De <strong style={{ color: 'var(--accent-yellow)' }}>{fmtUSD(sold)}</strong> vendidos en el
-        período entró{' '}
-        <strong style={{ color: 'var(--accent-green)' }}>{fmtUSD(cash)}</strong> de cash
-        {cash > sold ? ' (incluye cuotas de cierres previos)' : ''}. El pendiente total del
-        pipeline está en la tarjeta Outstanding.
-      </p>
+      <div className="flex gap-4 mt-2 text-sm" style={{ color: 'var(--text-dim)' }}>
+        <span><span style={{ color: 'var(--accent-green)' }}>■</span> cobrado</span>
+        <span><span style={{ color: 'var(--accent-orange)' }}>■</span> pendiente del período</span>
+      </div>
     </div>
   );
 }

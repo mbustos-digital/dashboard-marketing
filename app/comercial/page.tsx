@@ -134,15 +134,6 @@ export default async function ComercialPage() {
           <SCLTimeline scl={scl} tramos={tramos} />
 
           <CohortesTable
-            title="Cohortes semanales"
-            subtitle="Últimas 8 semanas, agrupadas por la semana de Junta 1"
-            cohortes={semanales}
-            fechaColLabel="Semana de"
-            fechaFormat={fmtSemana}
-            showCiclo={false}
-          />
-
-          <CohortesTable
             title="Cohortes mensuales"
             subtitle="Últimos 6 meses, agrupados por el mes de Junta 1"
             cohortes={mensuales}
@@ -150,6 +141,27 @@ export default async function ComercialPage() {
             fechaFormat={fmtMes}
             showCiclo={true}
           />
+
+          {/* Semanales colapsadas (Fase 18A): con ~20 leads/mes son ruido —
+              cohortes de 1-2 leads con porcentajes gigantes. */}
+          <details>
+            <summary
+              className="cursor-pointer select-none px-5 py-3 rounded-lg border text-base inline-block"
+              style={{ borderColor: 'var(--card-border)', color: 'var(--text-dim)' }}
+            >
+              Ver cohortes semanales ▾
+            </summary>
+            <div className="mt-3">
+              <CohortesTable
+                title="Cohortes semanales"
+                subtitle="Últimas 8 semanas, agrupadas por la semana de Junta 1. Con pocos leads por semana, los porcentajes son ruidosos — usá las mensuales para decidir."
+                cohortes={semanales}
+                fechaColLabel="Semana de"
+                fechaFormat={fmtSemana}
+                showCiclo={false}
+              />
+            </div>
+          </details>
 
           <p className="text-base" style={{ color: 'var(--text-pending)' }}>
             🟢 Madura (≥14d desde último J1, tasa confiable) · 🟡 Madurando

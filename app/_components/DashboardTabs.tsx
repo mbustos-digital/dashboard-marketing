@@ -17,7 +17,7 @@ const TABS: Array<{ key: TabKey; label: string; href: string }> = [
 export function DashboardTabs({ active }: { active: TabKey }) {
   return (
     <nav
-      className="flex items-center gap-1 mb-8 border-b"
+      className="flex items-center gap-1 mb-8 border-b overflow-x-auto whitespace-nowrap"
       style={{ borderColor: 'var(--card-border)' }}
     >
       {TABS.map((tab) => {
@@ -26,7 +26,7 @@ export function DashboardTabs({ active }: { active: TabKey }) {
           <Link
             key={tab.key}
             href={tab.href}
-            className={`px-4 py-3 text-lg font-medium transition-colors ${isActive ? '-mb-px border-b-2' : ''}`}
+            className={`shrink-0 px-4 py-3 text-lg font-medium transition-colors ${isActive ? '-mb-px border-b-2' : ''}`}
             style={{
               borderColor: isActive ? 'var(--accent-yellow)' : 'transparent',
               color: isActive ? 'var(--accent-yellow)' : 'var(--text-dim)',
