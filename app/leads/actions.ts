@@ -15,6 +15,7 @@ import {
   deleteLead,
   type LeadUpdateInput,
 } from '@/lib/leads';
+import { savePlanPagos, marcarPago, type PlanPagos } from '@/lib/pagos';
 
 function emptyToNull(v: FormDataEntryValue | null): string | null {
   if (v === null) return null;
@@ -60,6 +61,34 @@ export async function updateLeadAction(
   await updateLead(id, input);
   revalidatePath('/leads');
   revalidatePath(`/leads/${id}`);
+}
+
+/**
+ * Guarda el plan de pagos de un lead y regenera las cuotas no pagadas.
+ */
+export async function savePlanPagosAction(
+  leadId: number,
+  plan: PlanPagos,
+): Promise<void> {
+  await savePlanPagos(leadId, plan);
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath('/revenue');
+  revalidatePath('/general');
+}
+
+/**
+ * Marca (o desmarca) una cuota como cobrada. fechaPago editable.
+ */
+export async function marcarPagoAction(
+  pagoId: number,
+  leadId: number,
+  pagado: boolean,
+  fechaPago: string | null,
+): Promise<void> {
+  await marcarPago(pagoId, pagado, fechaPago);
+  revalidatePath(`/leads/${leadId}`);
+  revalidatePath('/revenue');
+  revalidatePath('/general');
 }
 
 /**

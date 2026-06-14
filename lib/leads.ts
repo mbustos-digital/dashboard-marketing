@@ -48,10 +48,17 @@ export type Lead = {
   fecha_confirmacion: string | null;
 
   // Cobranza — ortogonal a cierre. Cierre = vendido. Estos = cobrado.
+  // total_cobrado_usd y fecha_primer_pago se DERIVAN de los pagos (Fase 8-bis).
   fecha_primer_pago: string | null;
   monto_primer_pago: number | null;
   total_cobrado_usd: number | null;
   fecha_inicio_servicio: string | null;
+
+  // Plan de pagos (Fase 8-bis) — genera las filas de `pagos`
+  cobro_inicial_usd: number | null;
+  monto_cuota_usd: number | null;
+  total_cuotas: number | null;    // 1..6
+  dia_de_pago: number | null;     // 1..28
 
   adset_id_origen: string | null;
 

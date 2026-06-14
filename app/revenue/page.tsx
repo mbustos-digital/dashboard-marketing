@@ -114,7 +114,6 @@ export default async function RevenuePage({
             <CascadaBar
               sold={revenue.sold_revenue_usd}
               cash={revenue.cash_collected_usd}
-              outstanding={revenue.outstanding_usd}
             />
 
             <Grid>
@@ -128,17 +127,13 @@ export default async function RevenuePage({
                 label="Cash Collected"
                 value={fmtUSD(revenue.cash_collected_usd)}
                 accent="green"
-                hint={
-                  revenue.sold_revenue_usd > 0
-                    ? `${((revenue.cash_collected_usd / revenue.sold_revenue_usd) * 100).toFixed(0)}% de lo vendido · ${revenue.primeros_pagos_en_periodo} cliente${revenue.primeros_pagos_en_periodo === 1 ? '' : 's'} con primer pago`
-                    : `${revenue.primeros_pagos_en_periodo} cliente${revenue.primeros_pagos_en_periodo === 1 ? '' : 's'} con primer pago`
-                }
+                hint={`Cash que entró en el período (incluye cuotas de cierres previos) · ${revenue.primeros_pagos_en_periodo} cliente${revenue.primeros_pagos_en_periodo === 1 ? '' : 's'} con primer pago`}
               />
               <KPI
                 label="Outstanding"
                 value={fmtUSD(revenue.outstanding_usd)}
                 accent="orange"
-                hint="Pendiente de cobro (Sold - Cash)"
+                hint="Pendiente de cobro — todas las cuotas no pagadas del pipeline"
               />
             </Grid>
           </Section>
@@ -202,11 +197,9 @@ export default async function RevenuePage({
 function CascadaBar({
   sold,
   cash,
-  outstanding,
 }: {
   sold: number;
   cash: number;
-  outstanding: number;
 }) {
   if (sold <= 0) {
     return (
@@ -248,9 +241,11 @@ function CascadaBar({
         )}
       </div>
       <p className="text-base mt-2" style={{ color: 'var(--text-dim)' }}>
-        De <strong style={{ color: 'var(--accent-yellow)' }}>{fmtUSD(sold)}</strong> vendidos:{' '}
-        <strong style={{ color: 'var(--accent-green)' }}>{fmtUSD(cash)}</strong> cobrado y{' '}
-        <strong style={{ color: 'var(--accent-orange)' }}>{fmtUSD(Math.max(outstanding, 0))}</strong> pendiente.
+        De <strong style={{ color: 'var(--accent-yellow)' }}>{fmtUSD(sold)}</strong> vendidos en el
+        período entró{' '}
+        <strong style={{ color: 'var(--accent-green)' }}>{fmtUSD(cash)}</strong> de cash
+        {cash > sold ? ' (incluye cuotas de cierres previos)' : ''}. El pendiente total del
+        pipeline está en la tarjeta Outstanding.
       </p>
     </div>
   );

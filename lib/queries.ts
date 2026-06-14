@@ -7,6 +7,7 @@
 
 import { getSupabaseServer } from './supabase';
 import { TIPO_DE_CAMBIO_USD_MXN } from './config';
+import { getCashCollectedPeriodo, getOutstandingTotal } from './pagos';
 
 export type MarketingWindow = {
   // Rango
@@ -513,37 +514,38 @@ export async function getRevenuePeriod(
 ): Promise<RevenuePeriod> {
   const supabase = getSupabaseServer();
 
-  const [soldRes, cashRes, spendRes, primerosPagosCountRes] = await Promise.all([
-    // Sold: cerros del período
-    supabase
-      .from('leads')
-      .select('monto_cierre_usd')
-      .eq('cerro', true)
-      .gte('fecha_cierre', start)
-      .lte('fecha_cierre', end),
-    // Cash: primeros pagos del período
-    supabase
-      .from('leads')
-      .select('total_cobrado_usd')
-      .gte('fecha_primer_pago', start)
-      .lte('fecha_primer_pago', end),
-    // Spend Meta del período (MXN)
-    supabase
-      .from('marketing_metrics_daily')
-      .select('spend')
-      .eq('plataforma', 'meta')
-      .gte('fecha', start)
-      .lte('fecha', end),
-    // Count de clientes con primer pago en el período (denominador del CAC real)
-    supabase
-      .from('leads')
-      .select('id', { count: 'exact', head: true })
-      .gte('fecha_primer_pago', start)
-      .lte('fecha_primer_pago', end),
-  ]);
+  // cash_collected y outstanding ahora salen de la tabla `pagos` (Fase 8-bis):
+  //   cash    = Σ pagos pagado=true con fecha_pago en el período (inflow real,
+  //             incluye cuotas de clientes cerrados en meses previos).
+  //   outstanding = Σ pagos no pagados (receivables totales, NO acotado al
+  //             período) — es lo que falta cobrar en todo el pipeline.
+  const [soldRes, cash_collected_usd, outstanding_usd, spendRes, primerosPagosCountRes] =
+    await Promise.all([
+      // Sold: cerros del período
+      supabase
+        .from('leads')
+        .select('monto_cierre_usd')
+        .eq('cerro', true)
+        .gte('fecha_cierre', start)
+        .lte('fecha_cierre', end),
+      getCashCollectedPeriodo(start, end),
+      getOutstandingTotal(),
+      // Spend Meta del período (MXN)
+      supabase
+        .from('marketing_metrics_daily')
+        .select('spend')
+        .eq('plataforma', 'meta')
+        .gte('fecha', start)
+        .lte('fecha', end),
+      // Count de clientes con primer pago en el período (denominador del CAC real)
+      supabase
+        .from('leads')
+        .select('id', { count: 'exact', head: true })
+        .gte('fecha_primer_pago', start)
+        .lte('fecha_primer_pago', end),
+    ]);
 
   if (soldRes.error) throw new Error(`Sold falló: ${soldRes.error.message}`);
-  if (cashRes.error) throw new Error(`Cash falló: ${cashRes.error.message}`);
   if (spendRes.error) throw new Error(`Spend falló: ${spendRes.error.message}`);
   if (primerosPagosCountRes.error) {
     throw new Error(`Primeros pagos count falló: ${primerosPagosCountRes.error.message}`);
@@ -553,11 +555,7 @@ export async function getRevenuePeriod(
     (acc, r) => acc + Number(r.monto_cierre_usd ?? 0),
     0,
   );
-  const cash_collected_usd = (cashRes.data ?? []).reduce(
-    (acc, r) => acc + Number(r.total_cobrado_usd ?? 0),
-    0,
-  );
-  const outstanding_usd = sold_revenue_usd - cash_collected_usd;
+  // outstanding_usd ya viene de getOutstandingTotal() arriba (Σ cuotas no pagadas)
 
   const meta_spend_mxn = (spendRes.data ?? []).reduce(
     (acc, r) => acc + Number(r.spend ?? 0),

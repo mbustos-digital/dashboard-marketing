@@ -12,7 +12,9 @@ import {
   contarVslPlays,
   type Lead,
 } from '@/lib/leads';
+import { getPagosByLead } from '@/lib/pagos';
 import { EditLeadForm } from './EditLeadForm';
+import { CobranzaPlanCard } from './CobranzaPlanCard';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -44,6 +46,9 @@ export default async function LeadDetailPage({
 
   // Comportamiento VSL (Fase 7): cuántas veces vio el video este lead
   const vslPlays = await contarVslPlays(lead.visitor_id);
+
+  // Plan de pagos / cuotas (Fase 8-bis)
+  const pagos = await getPagosByLead(lead.id);
 
   const estado = estadoMadurezLead(lead);
   const { emoji, label, color } = labelMadurez(estado);
@@ -101,6 +106,11 @@ export default async function LeadDetailPage({
 
       {/* FORM */}
       <EditLeadForm lead={lead} />
+
+      {/* PLAN DE PAGOS / CUOTAS (Fase 8-bis) */}
+      <div className="mt-6">
+        <CobranzaPlanCard lead={lead} pagos={pagos} />
+      </div>
     </main>
   );
 }

@@ -21,6 +21,7 @@ import {
   type ResumenComparativo,
 } from '@/lib/queries';
 import { getDataSources, sourcesToMap } from '@/lib/sources';
+import { getCuotasPendientes, type CuotaPendiente } from '@/lib/pagos';
 import { ayerEnTijuana, primerDiaDelMesDeFecha, diasAntes } from '@/lib/date-utils';
 import { DashboardHeader } from '../_components/DashboardHeader';
 import { DashboardTabs } from '../_components/DashboardTabs';
@@ -46,6 +47,16 @@ function fmtNumber(n: number | null | undefined): string {
   return new Intl.NumberFormat('es-MX').format(Math.round(n));
 }
 
+function fmtFechaCorta(yyyy_mm_dd: string | null): string {
+  if (!yyyy_mm_dd) return '—';
+  const [y, m, d] = yyyy_mm_dd.split('-').map(Number);
+  return new Intl.DateTimeFormat('es-MX', {
+    day: 'numeric',
+    month: 'short',
+    timeZone: 'UTC',
+  }).format(new Date(Date.UTC(y, m - 1, d)));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Motor de alertas (8E) — conclusiones accionables, no datos crudos
 // ─────────────────────────────────────────────────────────────────────────────
@@ -60,11 +71,15 @@ type Alerta = {
   hrefLabel: string;
 };
 
+function etiquetaCuota(numero: number): string {
+  return numero === 0 ? 'Cobro inicial' : `Cuota ${numero}`;
+}
+
 function construirAlertas(
   funnel: FunnelMes,
   maduras: ResumenComercialMaduras,
   pipeline: DistribucionPipeline,
-  outstanding: number,
+  cuotas: { vencidas: CuotaPendiente[]; porVencer: CuotaPendiente[] },
 ): Alerta[] {
   const alertas: Alerta[] = [];
 
@@ -129,15 +144,26 @@ function construirAlertas(
     }
   }
 
-  // ── Cobranza pendiente ──
-  if (outstanding > 0) {
+  // ── Cuotas VENCIDAS (rojo) — una línea por cuota (Fase 8-bis) ──
+  for (const c of cuotas.vencidas) {
+    const diasVencida = Math.abs(c.dias);
+    alertas.push({
+      nivel: 'rojo',
+      titulo: `${etiquetaCuota(c.numero)} de ${c.lead_nombre} venció el ${fmtFechaCorta(c.fecha_esperada)}: ${fmtUSD(c.monto_usd)}`,
+      detalle: `Vencida hace ${diasVencida} ${diasVencida === 1 ? 'día' : 'días'}. Contactá al cliente y registrá el cobro cuando entre.`,
+      href: `/leads/${c.lead_id}`,
+      hrefLabel: 'Ver lead',
+    });
+  }
+
+  // ── Cuotas por vencer en ≤3 días (ámbar) ──
+  for (const c of cuotas.porVencer) {
     alertas.push({
       nivel: 'ambar',
-      titulo: `Cobranza pendiente: ${fmtUSD(outstanding)}`,
-      detalle:
-        'Hay diferencia entre lo vendido y lo cobrado este mes. Revisá quién debe el siguiente pago y agendá el follow-up.',
-      href: '/revenue',
-      hrefLabel: 'Ver Revenue',
+      titulo: `${etiquetaCuota(c.numero)} de ${c.lead_nombre} vence ${c.dias === 0 ? 'hoy' : `en ${c.dias} ${c.dias === 1 ? 'día' : 'días'}`}: ${fmtUSD(c.monto_usd)}`,
+      detalle: 'Anticipá el cobro: confirmá con el cliente antes de la fecha.',
+      href: `/leads/${c.lead_id}`,
+      hrefLabel: 'Ver lead',
     });
   }
 
@@ -172,23 +198,26 @@ export default async function GeneralPage() {
   let funnel: FunnelMes | null = null;
   let maduras: ResumenComercialMaduras | null = null;
   let pipeline: DistribucionPipeline | null = null;
-  let outstanding = 0;
+  let cuotas: { vencidas: CuotaPendiente[]; porVencer: CuotaPendiente[] } = {
+    vencidas: [],
+    porVencer: [],
+  };
   let comparativo: ResumenComparativo | null = null;
   let errorMsg: string | null = null;
 
   try {
     const sourceMap = sourcesToMap(await getDataSources());
-    const [f, m, p, rev, comp] = await Promise.all([
+    const [f, m, p, cuo, comp] = await Promise.all([
       getFunnelEtapas(mesInicio, ayerReal, sourceMap),
       getResumenComercialMaduras(),
       getDistribucionPipeline(),
-      getRevenuePeriod(mesInicio, ayerReal),
+      getCuotasPendientes(ayerReal),
       getResumenComparativo(mesInicio, ayerReal, mesAnteriorInicio, mesAnteriorFin),
     ]);
     funnel = f;
     maduras = m;
     pipeline = p;
-    outstanding = rev.outstanding_usd;
+    cuotas = cuo;
     comparativo = comp;
   } catch (err) {
     errorMsg = err instanceof Error ? err.message : String(err);
@@ -213,7 +242,7 @@ export default async function GeneralPage() {
         </div>
       ) : (
         <GeneralContent
-          alertas={construirAlertas(funnel, maduras, pipeline, outstanding)}
+          alertas={construirAlertas(funnel, maduras, pipeline, cuotas)}
           pipeline={pipeline}
           comparativo={comparativo}
         />
