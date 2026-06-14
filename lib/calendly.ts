@@ -90,6 +90,10 @@ export type CalendlyInviteePayload = {
     start_time?: string;
     end_time?: string;
     uri?: string;
+    // event_type: URI del tipo de evento (api.calendly.com/event_types/…)
+    // name: nombre visible del tipo de evento. Se usan para distinguir J1/J2.
+    event_type?: string;
+    name?: string;
   };
   questions_and_answers?: Array<{
     question?: string;
@@ -110,6 +114,51 @@ export type CalendlyInviteePayload = {
     salesforce_uuid?: string | null;
   };
 };
+
+/**
+ * Clasifica un evento de Calendly como J1, J2 o desconocido (Fase 10).
+ *
+ * El matcheo es tolerante: compara los valores configurados (env J1/J2, que
+ * pueden ser una URI o el nombre del evento) contra los campos del payload
+ * (event_type URI, name, uri) por igualdad exacta normalizada O por "slug"
+ * (último segmento de la URL). Si no matchea ninguno → 'desconocido', y el
+ * caller lo trata como J1 por compatibilidad.
+ */
+export type TipoJunta = 'j1' | 'j2' | 'desconocido';
+
+function normalizar(s: string): string {
+  return s.trim().toLowerCase();
+}
+
+function slug(s: string): string {
+  // último segmento no vacío de una URL/URI
+  const partes = normalizar(s).split('/').filter(Boolean);
+  return partes[partes.length - 1] ?? '';
+}
+
+function coincide(candidato: string, configurado: string): boolean {
+  const a = normalizar(candidato);
+  const b = normalizar(configurado);
+  if (!a || !b) return false;
+  if (a === b) return true;
+  // slug vs slug (cubre URL de agenda vs URI de API vs nombre)
+  const sa = slug(candidato);
+  const sb = slug(configurado);
+  return sa !== '' && sa === sb;
+}
+
+export function clasificarJunta(
+  scheduled: { event_type?: string; name?: string; uri?: string } | undefined,
+  cfg: { j1?: string | null; j2?: string | null },
+): TipoJunta {
+  const candidatos = [scheduled?.event_type, scheduled?.name, scheduled?.uri].filter(
+    (c): c is string => !!c && c.trim() !== '',
+  );
+  if (candidatos.length === 0) return 'desconocido';
+  if (cfg.j2 && candidatos.some((c) => coincide(c, cfg.j2!))) return 'j2';
+  if (cfg.j1 && candidatos.some((c) => coincide(c, cfg.j1!))) return 'j1';
+  return 'desconocido';
+}
 
 /**
  * Convierte un ISO timestamp UTC a fecha YYYY-MM-DD en zona Tijuana.

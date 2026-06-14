@@ -510,6 +510,86 @@ export async function upsertLeadFromMeta(input: {
 }
 
 /**
+ * Busca un lead por teléfono normalizado O email — misma lógica de match que
+ * upsertLeadFromMeta. Usado por el ruteo de J2 y las cancelaciones (Fase 10).
+ */
+export async function findLeadByContacto(
+  email: string | null,
+  telefono: string | null,
+): Promise<Lead | null> {
+  const supabase = getSupabaseServer();
+  const telNorm = normalizarTelefono(telefono);
+  if (telNorm) {
+    const { data, error } = await supabase
+      .from('leads')
+      .select('*')
+      .eq('telefono_normalizado', telNorm)
+      .maybeSingle();
+    if (error) throw new Error(`Error buscando lead por teléfono: ${error.message}`);
+    if (data) return data as Lead;
+  }
+  const emailNorm = email?.trim().toLowerCase();
+  if (emailNorm) {
+    const { data, error } = await supabase
+      .from('leads')
+      .select('*')
+      .ilike('email', emailNorm)
+      .maybeSingle();
+    if (error) throw new Error(`Error buscando lead por email: ${error.message}`);
+    if (data) return data as Lead;
+  }
+  return null;
+}
+
+/**
+ * Setea SOLO fecha_junta_2 en un lead (J2 entrante de Calendly, Fase 10).
+ * Nunca toca otros campos.
+ */
+export async function setFechaJunta2(leadId: number, fechaJ2: string): Promise<void> {
+  const supabase = getSupabaseServer();
+  const { error } = await supabase
+    .from('leads')
+    .update({ fecha_junta_2: fechaJ2 })
+    .eq('id', leadId);
+  if (error) throw new Error(`Error seteando fecha_junta_2 en lead ${leadId}: ${error.message}`);
+}
+
+/**
+ * Aplica una cancelación de Calendly al lead (Fase 10).
+ * - Si la fecha cancelada es la fecha_junta_2 y NO pasó → fecha_junta_2 = NULL.
+ * - Si es la fecha_junta_1 y NO pasó → fecha_junta_1 = NULL (fecha_agenda se
+ *   conserva: es el ancla histórica de cuándo agendó).
+ * - Si la junta ya pasó (o no matchea ninguna fecha) → no toca nada.
+ * Un reagendamiento llega como canceled + created, así que la fecha nueva la
+ * vuelve a llenar el created.
+ * @returns descripción de lo que cambió, para el log.
+ */
+export async function cancelarJuntaEnLead(
+  lead: Lead,
+  fechaCancelada: string,
+  hoy: string,
+): Promise<string> {
+  const yaPaso = fechaCancelada < hoy;
+  if (yaPaso) return 'junta ya pasó — sin cambios';
+
+  let campo: 'fecha_junta_2' | 'fecha_junta_1' | null = null;
+  if (lead.fecha_junta_2 && fechaCancelada === lead.fecha_junta_2) {
+    campo = 'fecha_junta_2';
+  } else if (lead.fecha_junta_1 && fechaCancelada === lead.fecha_junta_1) {
+    campo = 'fecha_junta_1';
+  }
+  if (!campo) return 'fecha cancelada no coincide con J1/J2 — sin cambios';
+
+  const supabase = getSupabaseServer();
+  const { error } = await supabase
+    .from('leads')
+    .update({ [campo]: null })
+    .eq('id', lead.id);
+  if (error) throw new Error(`Error cancelando ${campo} en lead ${lead.id}: ${error.message}`);
+  return `${campo} = NULL (cancelación de junta futura)`;
+}
+
+/**
  * Upsert por teléfono O email — usado por el webhook de Calendly.
  *
  * - Match (4B-bis): busca primero por telefono_normalizado, después por

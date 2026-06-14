@@ -15,10 +15,27 @@ import {
   verifyCalendlySignature,
   isoToFechaTijuana,
   extractAnswer,
+  clasificarJunta,
   CalendlySignatureError,
   type CalendlyWebhookPayload,
 } from '@/lib/calendly';
-import { upsertLeadFromCalendly } from '@/lib/leads';
+import {
+  upsertLeadFromCalendly,
+  findLeadByContacto,
+  setFechaJunta2,
+  cancelarJuntaEnLead,
+} from '@/lib/leads';
+import { enqueueJ2SinMatch } from '@/lib/review-queue';
+import { hoyEnTijuana } from '@/lib/date-utils';
+
+// Identificadores de los event types de Calendly (Fase 10). Si no están
+// seteados, todo cae al flujo J1 actual (compatibilidad).
+const CFG_JUNTAS = {
+  j1: process.env.CALENDLY_EVENT_TYPE_J1 ?? null,
+  j2: process.env.CALENDLY_EVENT_TYPE_J2 ?? null,
+};
+
+const KEYWORDS_TEL = ['tel', 'phone', 'celular', 'móvil', 'movil'];
 
 export const dynamic = 'force-dynamic';
 
@@ -67,6 +84,45 @@ export async function POST(request: NextRequest) {
           { status: 400 },
         );
       }
+
+      // ── Ruteo J1/J2 (Fase 10) ──
+      const tipoJunta = clasificarJunta(payload.scheduled_event, CFG_JUNTAS);
+      if (tipoJunta === 'j2') {
+        const emailJ2 = payload.email?.trim() || null;
+        const nombreJ2 = (payload.name || `${payload.first_name ?? ''} ${payload.last_name ?? ''}`.trim()).trim() || null;
+        const telefonoJ2 = extractAnswer(payload.questions_and_answers, KEYWORDS_TEL);
+        const startTimeIso = payload.scheduled_event?.start_time;
+        if (!startTimeIso) {
+          return Response.json(
+            { ok: false, error: 'incomplete_payload', missing: { start_time: true }, tipo: 'j2' },
+            { status: 400 },
+          );
+        }
+        try {
+          const fechaJ2 = isoToFechaTijuana(startTimeIso);
+          const lead = await findLeadByContacto(emailJ2, telefonoJ2);
+          if (lead) {
+            // NUNCA crear desde una J2: solo seteamos fecha_junta_2 del lead existente.
+            await setFechaJunta2(lead.id, fechaJ2);
+            console.log(`[webhook:calendly] J2 → lead id=${lead.id} email=${emailJ2 ?? '—'} fecha_j2=${fechaJ2} ms=${ms}`);
+            return Response.json({ ok: true, event: body.event, tipo: 'j2', action: 'set_j2', lead_id: lead.id, ms });
+          }
+          // Sin match: a la cola de revisión manual (tab Hoy).
+          await enqueueJ2SinMatch({
+            email: emailJ2,
+            nombre: nombreJ2,
+            fecha_evento: fechaJ2,
+            payload_resumen: { email: emailJ2, nombre: nombreJ2, start_time: startTimeIso, event_type: payload.scheduled_event?.event_type ?? payload.scheduled_event?.name ?? null },
+          });
+          console.warn(`[webhook:calendly] J2 SIN MATCH → review_queue email=${emailJ2 ?? '—'} fecha_j2=${fechaJ2} ms=${ms}`);
+          return Response.json({ ok: true, event: body.event, tipo: 'j2', action: 'review_queue', ms });
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(`[webhook:calendly] error procesando J2: ${message}`);
+          return Response.json({ ok: false, error: 'processing', message, tipo: 'j2' }, { status: 500 });
+        }
+      }
+      // tipoJunta 'j1' o 'desconocido' → flujo actual sin cambios.
 
       const email = payload.email?.trim();
       const nombre = (payload.name || `${payload.first_name ?? ''} ${payload.last_name ?? ''}`.trim()).trim();
@@ -162,14 +218,30 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    case 'invitee.canceled':
-      console.log(`[webhook:calendly] cancelación recibida (ignorada por config MVP)`);
-      return Response.json({
-        ok: true,
-        event: body.event,
-        ignored: true,
-        reason: 'Cancelaciones se manejan manualmente en /leads/[id]',
-      });
+    case 'invitee.canceled': {
+      const payload = body.payload;
+      if (!payload) {
+        return Response.json({ ok: true, event: body.event, ignored: true, reason: 'sin payload' });
+      }
+      try {
+        const email = payload.email?.trim() || null;
+        const telefono = extractAnswer(payload.questions_and_answers, KEYWORDS_TEL);
+        const startTimeIso = payload.scheduled_event?.start_time;
+        const lead = await findLeadByContacto(email, telefono);
+        if (!lead || !startTimeIso) {
+          console.log(`[webhook:calendly] cancelación sin lead/fecha (email=${email ?? '—'}) — ignorada`);
+          return Response.json({ ok: true, event: body.event, ignored: true, reason: 'sin match o sin fecha' });
+        }
+        const fechaCancelada = isoToFechaTijuana(startTimeIso);
+        const cambio = await cancelarJuntaEnLead(lead, fechaCancelada, hoyEnTijuana());
+        console.log(`[webhook:calendly] cancelación lead id=${lead.id} fecha=${fechaCancelada}: ${cambio} ms=${ms}`);
+        return Response.json({ ok: true, event: body.event, lead_id: lead.id, cambio, ms });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[webhook:calendly] error procesando cancelación: ${message}`);
+        return Response.json({ ok: false, error: 'processing', message, event: body.event }, { status: 500 });
+      }
+    }
 
     default:
       console.log(`[webhook:calendly] evento no manejado: ${body.event}`);
