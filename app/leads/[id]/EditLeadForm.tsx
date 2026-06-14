@@ -16,7 +16,7 @@
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { updateLeadAction, deleteLeadAction } from '../actions';
-import type { Lead, LeadUpdateInput } from '@/lib/leads';
+import type { Lead, LeadUpdateInput, EstadoLead } from '@/lib/leads';
 
 type TriState = boolean | null;
 
@@ -38,7 +38,10 @@ export function EditLeadForm({ lead }: { lead: Lead }) {
   const [asistioJ1, setAsistioJ1] = useState<TriState>(lead.asistio_j1);
   const [asistioJ2, setAsistioJ2] = useState<TriState>(lead.asistio_j2);
   const [calificado, setCalificado] = useState<TriState>(lead.calificado);
-  const [cerro, setCerro] = useState<TriState>(lead.cerro);
+
+  // Resolución (Fase 8) — estado del lead reemplaza al booleano cerro
+  const [estado, setEstado] = useState<EstadoLead>(lead.estado_lead);
+  const [motivoPerdida, setMotivoPerdida] = useState(lead.motivo_perdida ?? '');
   const [montoCierre, setMontoCierre] = useState<string>(
     lead.monto_cierre_usd?.toString() ?? '',
   );
@@ -59,7 +62,8 @@ export function EditLeadForm({ lead }: { lead: Lead }) {
   const asistioJ1Disabled = !fechaJ1;
   const calificadoDisabled = asistioJ1 !== true;
   const asistioJ2Disabled = !fechaJ2;
-  const mostrarCierreCampos = cerro === true;
+  const esGanado = estado === 'ganado';
+  const esPerdidaODescal = estado === 'perdido' || estado === 'descalificado';
 
   // Auto-cleanup en cambios de parents (espejo de las reglas del backend)
   const handleFechaJ1Change = (v: string) => {
@@ -73,11 +77,15 @@ export function EditLeadForm({ lead }: { lead: Lead }) {
     setAsistioJ1(v);
     if (v !== true) setCalificado(null);
   };
-  const handleCerroChange = (v: TriState) => {
-    setCerro(v);
-    if (v !== true) {
+  const handleEstadoChange = (v: EstadoLead) => {
+    setEstado(v);
+    // Espejo de las reglas del backend: limpiar lo que deja de aplicar.
+    if (v !== 'ganado') {
       setMontoCierre('');
       setFechaCierre('');
+    }
+    if (v !== 'perdido' && v !== 'descalificado') {
+      setMotivoPerdida('');
     }
   };
   const handleFechaJ2Change = (v: string) => {
@@ -94,10 +102,10 @@ export function EditLeadForm({ lead }: { lead: Lead }) {
       setFeedback({ kind: 'err', msg: 'Nombre es requerido' });
       return;
     }
-    if (cerro === true) {
+    if (estado === 'ganado') {
       const monto = parseFloat(montoCierre);
       if (!Number.isFinite(monto) || monto <= 0) {
-        setFeedback({ kind: 'err', msg: 'Si cerró = Sí, monto debe ser un número positivo' });
+        setFeedback({ kind: 'err', msg: 'Si el estado es Ganado, el monto debe ser un número positivo' });
         return;
       }
     }
@@ -113,9 +121,12 @@ export function EditLeadForm({ lead }: { lead: Lead }) {
       asistio_j1: asistioJ1,
       asistio_j2: asistioJ2,
       calificado,
-      cerro,
-      monto_cierre_usd: cerro === true ? parseFloat(montoCierre) : null,
-      fecha_cierre: cerro === true ? fechaCierre || null : null,
+      // Resolución (Fase 8): estado_lead es la fuente de verdad; updateLead
+      // deriva `cerro` para no romper Revenue.
+      estado_lead: estado,
+      motivo_perdida: esPerdidaODescal ? (motivoPerdida.trim() || null) : null,
+      monto_cierre_usd: estado === 'ganado' ? parseFloat(montoCierre) : null,
+      fecha_cierre: estado === 'ganado' ? fechaCierre || null : null,
       fecha_confirmacion: fechaConfirmacion || null,
       fecha_primer_pago: fechaPrimerPago || null,
       monto_primer_pago: montoPrimerPago.trim() ? parseFloat(montoPrimerPago) : null,
@@ -213,13 +224,18 @@ export function EditLeadForm({ lead }: { lead: Lead }) {
         </div>
       </Card>
 
-      {/* ─── CIERRE ─── */}
-      <Card title="Cierre">
-        <Field label="¿Cerró cliente?">
-          <TriToggle value={cerro} onChange={handleCerroChange} />
+      {/* ─── RESOLUCIÓN ─── */}
+      <Card title="Resolución">
+        <p className="text-base mb-5" style={{ color: 'var(--text-dim)' }}>
+          Cómo terminó este lead. <strong>Perdido</strong> = lo trabajamos y no
+          compró. <strong>Descalificado</strong> = no era buen fit (presupuesto,
+          tamaño, timing). <strong>Abierto</strong> = sigue en proceso.
+        </p>
+        <Field label="Estado del lead">
+          <EstadoSelector value={estado} onChange={handleEstadoChange} />
         </Field>
 
-        {mostrarCierreCampos && (
+        {esGanado && (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mt-5">
             <Field label="Monto del cierre (USD)" required>
               <input
@@ -228,7 +244,7 @@ export function EditLeadForm({ lead }: { lead: Lead }) {
                 min="0"
                 value={montoCierre}
                 onChange={(e) => setMontoCierre(e.target.value)}
-                required={cerro === true}
+                required={estado === 'ganado'}
                 className="w-full px-3 py-2 rounded border text-lg"
                 style={{
                   background: '#0a0a0a',
@@ -239,6 +255,17 @@ export function EditLeadForm({ lead }: { lead: Lead }) {
             </Field>
             <Field label="Fecha de cierre">
               <TextInput type="date" value={fechaCierre} onChange={setFechaCierre} />
+            </Field>
+          </div>
+        )}
+
+        {esPerdidaODescal && (
+          <div className="mt-5">
+            <Field
+              label="Motivo"
+              hint="Tocá una sugerencia o escribí el tuyo. Sirve para ver patrones de pérdida."
+            >
+              <MotivoSugerencias value={motivoPerdida} onChange={setMotivoPerdida} />
             </Field>
           </div>
         )}
@@ -463,6 +490,95 @@ function TriToggle({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EstadoSelector — selector segmentado de 4 estados (Fase 8)
+// ─────────────────────────────────────────────────────────────────────────────
+function EstadoSelector({
+  value,
+  onChange,
+}: {
+  value: EstadoLead;
+  onChange: (v: EstadoLead) => void;
+}) {
+  const options: Array<{ v: EstadoLead; label: string; color: string }> = [
+    { v: 'abierto', label: 'Abierto', color: 'var(--text-dim)' },
+    { v: 'ganado', label: 'Ganado', color: 'var(--accent-green)' },
+    { v: 'perdido', label: 'Perdido', color: 'var(--accent-orange)' },
+    { v: 'descalificado', label: 'Descalificado', color: 'var(--text-dim)' },
+  ];
+  return (
+    <div className="inline-flex rounded-lg border overflow-hidden flex-wrap" style={{ borderColor: 'var(--card-border)' }}>
+      {options.map((opt, i) => {
+        const active = value === opt.v;
+        return (
+          <button
+            key={opt.v}
+            type="button"
+            onClick={() => onChange(opt.v)}
+            className="px-4 py-2 text-base font-medium transition-colors"
+            style={{
+              background: active ? '#1a1a1a' : 'transparent',
+              color: active ? opt.color : 'var(--text-dim)',
+              borderRight: i < options.length - 1 ? '1px solid var(--card-border)' : 'none',
+            }}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MotivoSugerencias — chips de sugerencia + texto libre (Fase 8)
+// ─────────────────────────────────────────────────────────────────────────────
+function MotivoSugerencias({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const sugerencias = ['Precio', 'Timing', 'No calificado', 'Fantasma', 'Otro'];
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-2">
+        {sugerencias.map((s) => {
+          const active = value.trim().toLowerCase() === s.toLowerCase();
+          return (
+            <button
+              key={s}
+              type="button"
+              onClick={() => onChange(s)}
+              className="px-3 py-1.5 rounded-full border text-sm transition-colors"
+              style={{
+                background: active ? '#1a1a1a' : 'transparent',
+                borderColor: active ? 'var(--accent-yellow)' : 'var(--card-border)',
+                color: active ? 'var(--accent-yellow)' : 'var(--text-dim)',
+              }}
+            >
+              {s}
+            </button>
+          );
+        })}
+      </div>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="Motivo (texto libre)"
+        className="w-full px-3 py-2 rounded border text-lg"
+        style={{
+          background: '#0a0a0a',
+          borderColor: 'var(--card-border)',
+          color: 'var(--text)',
+        }}
+      />
     </div>
   );
 }

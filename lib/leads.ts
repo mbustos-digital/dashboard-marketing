@@ -13,6 +13,14 @@ import { sendMetaCAPIEvent } from './meta-capi';
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Desenlace explícito del lead (Fase 8). Fuente de verdad del resultado:
+//   - abierto:        en proceso, sin desenlace todavía
+//   - ganado:         cerró (equivale a cerro=true)
+//   - perdido:        lo trabajamos y no compró (cerro=false)
+//   - descalificado:  no era buen fit (cerro=false)
+// `cerro` se mantiene en sync (lo derivan las queries de Revenue).
+export type EstadoLead = 'abierto' | 'ganado' | 'perdido' | 'descalificado';
+
 export type Lead = {
   id: number;
   nombre: string;
@@ -28,6 +36,10 @@ export type Lead = {
   asistio_j2: boolean | null;
   calificado: boolean | null;
   cerro: boolean | null;
+
+  // Desenlace explícito (Fase 8) — coherente con `cerro`
+  estado_lead: EstadoLead;
+  motivo_perdida: string | null;      // solo aplica a perdido/descalificado
 
   monto_cierre_usd: number | null;
   fecha_cierre: string | null;
@@ -112,6 +124,11 @@ export type LeadUpdateInput = {
   asistio_j2?: boolean | null;
   calificado?: boolean | null;
   cerro?: boolean | null;
+
+  // Desenlace (Fase 8). Si viene estado_lead, manda él y deriva cerro.
+  estado_lead?: EstadoLead;
+  motivo_perdida?: string | null;
+
   monto_cierre_usd?: number | null;
   fecha_cierre?: string | null;
 
@@ -208,6 +225,33 @@ export async function updateLead(
   // Estado fusionado: lo que viene del input gana, lo demás se mantiene
   const merged = { ...actual, ...input };
 
+  // ───────────────────────────────────────────────────────────────────
+  // Sincronización estado_lead <-> cerro (Fase 8)
+  // ───────────────────────────────────────────────────────────────────
+  // estado_lead es la fuente de verdad del desenlace; cerro se deriva para no
+  // romper las queries de Revenue que todavía leen cerro.
+  //   ganado        -> cerro = true
+  //   perdido/descal -> cerro = false
+  //   abierto       -> cerro = null
+  // Si el caller NO mandó estado_lead pero sí cerro (compat con flujos viejos),
+  // derivamos el estado desde cerro.
+  if (input.estado_lead !== undefined) {
+    if (merged.estado_lead === 'ganado') merged.cerro = true;
+    else if (merged.estado_lead === 'perdido' || merged.estado_lead === 'descalificado') merged.cerro = false;
+    else merged.cerro = null; // abierto
+  } else if (input.cerro !== undefined) {
+    if (merged.cerro === true) merged.estado_lead = 'ganado';
+    else if (merged.cerro === false) {
+      // cerro=false puede ser perdido o descalificado; conservamos descalificado
+      // si ya estaba, si no, default perdido.
+      merged.estado_lead = actual.estado_lead === 'descalificado' ? 'descalificado' : 'perdido';
+    } else merged.estado_lead = 'abierto';
+  }
+  // motivo solo tiene sentido en perdido/descalificado
+  if (merged.estado_lead !== 'perdido' && merged.estado_lead !== 'descalificado') {
+    merged.motivo_perdida = null;
+  }
+
   // Aplicar reglas de coherencia
   if (!merged.fecha_junta_1) {
     merged.asistio_j1 = null;
@@ -261,6 +305,8 @@ export async function updateLead(
     asistio_j2: merged.asistio_j2,
     calificado: merged.calificado,
     cerro: merged.cerro,
+    estado_lead: merged.estado_lead,
+    motivo_perdida: merged.motivo_perdida,
     monto_cierre_usd: merged.monto_cierre_usd,
     fecha_cierre: merged.fecha_cierre,
     fecha_confirmacion: merged.fecha_confirmacion,
@@ -637,14 +683,42 @@ export async function upsertLeadFromCalendly(
  */
 export function estadoMadurezLead(lead: Lead, hoy: Date = new Date()): EstadoMadurez {
   if (!lead.fecha_junta_1) return 'sin_j1';
-  const [y, m, d] = lead.fecha_junta_1.split('-').map(Number);
-  const fechaJ1 = new Date(Date.UTC(y, m - 1, d));
-  const hoyDate = new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), hoy.getUTCDate()));
-  const diffMs = hoyDate.getTime() - fechaJ1.getTime();
-  const dias = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  const dias = diasDesdeJ1(lead.fecha_junta_1, hoy);
+  if (dias === null) return 'sin_j1';
+  // J1 en el futuro (dias < 0): la cohorte recién arranca → 'reciente', nunca
+  // 'madura'. Evita el bug de "−9 días desde J1" / madurez falsa (Fase 8).
+  if (dias < 0) return 'reciente';
   if (dias >= 14) return 'madura';
   if (dias >= 5) return 'madurando';
   return 'reciente';
+}
+
+/**
+ * Días (enteros) entre la J1 y hoy. Negativo si la J1 es futura.
+ * @returns null si no hay fecha_junta_1.
+ */
+export function diasDesdeJ1(fechaJ1: string | null, hoy: Date = new Date()): number | null {
+  if (!fechaJ1) return null;
+  const [y, m, d] = fechaJ1.split('-').map(Number);
+  const fecha = new Date(Date.UTC(y, m - 1, d));
+  const hoyUTC = new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), hoy.getUTCDate()));
+  return Math.floor((hoyUTC.getTime() - fecha.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+/**
+ * Texto humano de la cohorte para la ficha del lead (Fase 8).
+ * J1 futura → "faltan X días para J1"; J1 pasada → "X días desde J1".
+ * @returns null si no hay J1.
+ */
+export function textoCohorteJ1(fechaJ1: string | null, hoy: Date = new Date()): string | null {
+  const dias = diasDesdeJ1(fechaJ1, hoy);
+  if (dias === null) return null;
+  if (dias < 0) {
+    const faltan = Math.abs(dias);
+    return `faltan ${faltan} ${faltan === 1 ? 'día' : 'días'} para J1`;
+  }
+  if (dias === 0) return 'J1 es hoy';
+  return `${dias} ${dias === 1 ? 'día' : 'días'} desde J1`;
 }
 
 /**

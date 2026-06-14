@@ -3,7 +3,7 @@
 // =============================================================================
 
 import Link from 'next/link';
-import { listLeads, estadoMadurezLead, labelMadurez } from '@/lib/leads';
+import { listLeads, estadoMadurezLead, labelMadurez, type Lead } from '@/lib/leads';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -117,7 +117,7 @@ export default async function LeadsPage() {
                 <th className="px-4 py-3 hidden md:table-cell">Origen</th>
                 <th className="px-4 py-3">Fecha J1</th>
                 <th className="px-4 py-3">Cohorte</th>
-                <th className="px-4 py-3 text-right">Cierre</th>
+                <th className="px-4 py-3 text-right">Estado</th>
                 <th className="px-4 py-3 text-right hidden md:table-cell">Creado</th>
               </tr>
             </thead>
@@ -168,15 +168,7 @@ export default async function LeadsPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3 text-right">
-                      {lead.cerro === true ? (
-                        <span style={{ color: 'var(--accent-green)' }}>
-                          {fmtCurrency(lead.monto_cierre_usd)}
-                        </span>
-                      ) : lead.cerro === false ? (
-                        <span style={{ color: 'var(--text-pending)' }}>No</span>
-                      ) : (
-                        <span style={{ color: 'var(--text-pending)' }}>—</span>
-                      )}
+                      <EstadoChip lead={lead} />
                     </td>
                     <td
                       className="px-4 py-3 text-right hidden md:table-cell text-sm"
@@ -193,4 +185,46 @@ export default async function LeadsPage() {
       )}
     </main>
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EstadoChip — chip de desenlace del lead (Fase 8)
+//   ganado: verde + monto · perdido: rojo tenue · descalificado: gris · abierto: —
+// ─────────────────────────────────────────────────────────────────────────────
+function EstadoChip({ lead }: { lead: Lead }) {
+  const base =
+    'inline-block px-2.5 py-1 rounded-full text-sm font-medium whitespace-nowrap';
+  switch (lead.estado_lead) {
+    case 'ganado':
+      return (
+        <span
+          className={base}
+          style={{ background: 'rgba(40,167,69,0.12)', color: 'var(--accent-green)' }}
+        >
+          Ganado · {fmtCurrency(lead.monto_cierre_usd)}
+        </span>
+      );
+    case 'perdido':
+      return (
+        <span
+          className={base}
+          style={{ background: 'rgba(255,107,53,0.10)', color: 'var(--accent-orange)' }}
+          title={lead.motivo_perdida ?? undefined}
+        >
+          Perdido
+        </span>
+      );
+    case 'descalificado':
+      return (
+        <span
+          className={base}
+          style={{ background: '#1a1a1a', color: 'var(--text-dim)' }}
+          title={lead.motivo_perdida ?? undefined}
+        >
+          Descalificado
+        </span>
+      );
+    default:
+      return <span style={{ color: 'var(--text-pending)' }}>—</span>;
+  }
 }

@@ -302,6 +302,7 @@ export type CohorteSemana = {
   ultima_j1_cohorte: string;
   dias_desde_ultima_j1: number;
   estado_madurez: EstadoMadurezCohorte;
+  dias_promedio_ciclo: number | null; // J1 → cierre (agregado en 0013)
 };
 
 export type CohorteMes = {
@@ -360,18 +361,28 @@ export type ResumenComercialMaduras = {
 };
 
 /**
- * Agrega TODAS las cohortes mensuales con estado_madurez='madura'.
- * Es la base honesta para tomar decisiones — las cohortes recientes están
- * incompletas y mentirían en los promedios.
+ * Agrega las cohortes SEMANALES con estado_madurez='madura'.
+ *
+ * FUENTE DE VERDAD ÚNICA del KPI de no-show / ratio joya (Fase 8). Antes esto
+ * leía las cohortes MENSUALES, y eso generaba el bug medido en producción:
+ * el KPI de no-show daba 0% mientras la cohorte madura de la semana del 4-may
+ * mostraba 75%. La causa: la madurez del mes se mide por su ÚLTIMO J1, así que
+ * un único J1 tardío de fin de mes volvía 'reciente' a TODO el mes y excluía
+ * del KPI semanas tempranas ya maduras (que la tabla sí mostraba como madura).
+ *
+ * Definición elegida: madurez a nivel SEMANA (cohorte madura ⇔ su último J1 fue
+ * hace ≥14 días). Como una semana abarca ≤7 días, una semana madura implica que
+ * TODOS sus leads tuvieron ≥14 días para convertir. El KPI agrega exactamente
+ * las filas verdes de la tabla semanal → KPI y tabla cuentan lo mismo.
  */
 export async function getResumenComercialMaduras(): Promise<ResumenComercialMaduras> {
   const supabase = getSupabaseServer();
   const { data, error } = await supabase
-    .from('v_cohortes_mensuales')
+    .from('v_cohortes_semanales')
     .select('*')
     .eq('estado_madurez', 'madura');
   if (error) throw new Error(`Query maduras falló: ${error.message}`);
-  const cohortes = (data ?? []) as CohorteMes[];
+  const cohortes = (data ?? []) as CohorteSemana[];
 
   const total_j1 = cohortes.reduce((s, c) => s + (c.total_j1 ?? 0), 0);
   const asistencias = cohortes.reduce((s, c) => s + (c.asistencias ?? 0), 0);

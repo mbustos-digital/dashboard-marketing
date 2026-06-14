@@ -8,6 +8,7 @@ import {
   getLead,
   estadoMadurezLead,
   labelMadurez,
+  textoCohorteJ1,
   contarVslPlays,
   type Lead,
 } from '@/lib/leads';
@@ -47,15 +48,9 @@ export default async function LeadDetailPage({
   const estado = estadoMadurezLead(lead);
   const { emoji, label, color } = labelMadurez(estado);
 
-  // Cálculo informativo: días desde J1
-  let diasDesdeJ1: number | null = null;
-  if (lead.fecha_junta_1) {
-    const [y, m, d] = lead.fecha_junta_1.split('-').map(Number);
-    const fechaJ1 = new Date(Date.UTC(y, m - 1, d));
-    const hoy = new Date();
-    const hoyUTC = new Date(Date.UTC(hoy.getUTCFullYear(), hoy.getUTCMonth(), hoy.getUTCDate()));
-    diasDesdeJ1 = Math.floor((hoyUTC.getTime() - fechaJ1.getTime()) / (1000 * 60 * 60 * 24));
-  }
+  // Texto informativo de la cohorte. J1 futura → "faltan X días para J1"
+  // (nunca "−X días desde J1"). Fase 8.
+  const textoJ1 = textoCohorteJ1(lead.fecha_junta_1);
 
   return (
     <main className="min-h-screen w-full px-6 py-8 md:px-12 md:py-12 bg-[var(--bg)] text-[var(--text)]">
@@ -90,9 +85,9 @@ export default async function LeadDetailPage({
               <span>{emoji}</span>
               <span style={{ color, fontWeight: 600 }}>{label}</span>
             </div>
-            {diasDesdeJ1 !== null && (
+            {textoJ1 && (
               <div className="text-sm mt-1" style={{ color: 'var(--text-dim)' }}>
-                {diasDesdeJ1} {diasDesdeJ1 === 1 ? 'día' : 'días'} desde J1
+                {textoJ1}
               </div>
             )}
           </div>
